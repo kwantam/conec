@@ -1,5 +1,9 @@
 # conec: COordinated NEtwork Channels
 
+[![Documentation](https://docs.rs/conec/badge.svg)](https://docs.rs/conec/)
+[![Crates.io](https://img.shields.io/crates/v/conec.svg)](https://crates.io/crates/conec)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
+
 This is a brand-new WIP repo in which I'll implement the following network
 abstraction:
 
