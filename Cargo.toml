@@ -1,0 +1,13 @@
+[package]
+name = "conec"
+version = "0.0.1"
+authors = ["kwantam <kwantam@gmail.com>"]
+edition = "2018"
+description = "COordinated NEtwork Channels"
+license = "Apache-2.0"
+repository = "https://github.com/kwantam/conec"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+quinn = "0.6"
