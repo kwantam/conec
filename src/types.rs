@@ -3,8 +3,8 @@ use futures::prelude::*;
 use futures::sink::Send as SinkSend;
 use futures::stream::TryNext;
 use quinn::{
-    ClientConfig, Connection, Datagrams, Endpoint, Incoming, IncomingBiStreams, IncomingUniStreams, NewConnection, RecvStream,
-    SendStream,
+    Connection, Datagrams, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection,
+    RecvStream, SendStream,
 };
 use serde::{Deserialize, Serialize};
 use std::net::ToSocketAddrs;
@@ -13,7 +13,6 @@ use tokio_serde::SymmetricallyFramed;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub struct ConecConnection {
-    endpoint: Endpoint,
     connection: Connection,
     iu_streams: IncomingUniStreams,
     ib_streams: IncomingBiStreams,
@@ -21,27 +20,23 @@ pub struct ConecConnection {
 }
 
 impl ConecConnection {
-    pub async fn connect(ccfg: ClientConfig, caddr: &str, cport: u16) -> Result<(Self, Incoming)> {
-        // build the QUIC endpoint
-        let mut endpoint = Endpoint::builder();
-        endpoint.default_client_config(ccfg);
-        let (endpoint, incoming) = endpoint.bind(&"0.0.0.0:0".parse().unwrap())?;
-
-        // connect to the coordinator
+    pub async fn connect(endpoint: &mut Endpoint, caddr: &str, cport: u16) -> Result<Self> {
+        // resolve address
         let coord_addr = (caddr, cport)
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| anyhow!("connect: could not resolve coordinator address"))?;
-        let nc =
+
+        // connect and return a ConecConnection
+        Ok(ConecConnection::new(
             endpoint
                 .connect(&coord_addr, caddr)?
                 .await
-                .map_err(|e| anyhow!("failed to connect: {}", e))?;
-        let ccon = ConecConnection::new(nc, endpoint);
-        Ok((ccon, incoming))
+                .map_err(|e| anyhow!("failed to connect: {}", e))?,
+        ))
     }
 
-    pub fn new(nc: NewConnection, ep: Endpoint) -> Self {
+    pub fn new(nc: NewConnection) -> Self {
         let NewConnection {
             connection: conn,
             uni_streams: u_str,
@@ -50,7 +45,6 @@ impl ConecConnection {
             ..
         } = nc;
         ConecConnection {
-            endpoint: ep,
             connection: conn,
             iu_streams: u_str,
             ib_streams: b_str,
@@ -58,22 +52,18 @@ impl ConecConnection {
         }
     }
 
-    /*
-    pub async fn accept(&mut self) -> Result<NewConnection> {
-        if let Some(conn) = self.incoming.next().await {
-            Ok(conn.await.map_err(|e| anyhow!("accept failed: {}", e))?)
-        } else {
-            Err(anyhow!("accept failed: unexpected end of stream"))
-        }
-    }
-    */
-
-    pub fn get_connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    pub fn clone_endpoint(&self) -> Endpoint {
-        self.endpoint.clone()
+    pub async fn connect_ctrl(&mut self, id: String) -> Result<CtrlStream> {
+        let (cc_send, cc_recv) = self
+            .connection
+            .open_bi()
+            .await
+            .map_err(|e| anyhow!("connect_ctrl failed: {}", e))?;
+        let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
+        ctrl_stream
+            .send_hello(id)
+            .await
+            .map_err(|e| anyhow!("connect_ctrl error sending hello: {}", e))?;
+        Ok(ctrl_stream)
     }
 }
 
@@ -175,26 +165,34 @@ impl CtrlStream {
         self.send(ClHello(id))
             .await
             .map_err(|e| anyhow!("send_hello: could not send: {}", e))?;
-        match self.recv().await.map_err(|e| anyhow!("send_hello: could not recv: {}", e))? {
+        match self
+            .recv()
+            .await
+            .map_err(|e| anyhow!("send_hello: could not recv: {}", e))?
+        {
             Some(CoHello) => {
                 self.peer = None;
                 Ok(())
-            },
+            }
             Some(ClHello(pid)) => {
                 self.peer = Some(pid);
                 Ok(())
-            },
+            }
             _ => Err(anyhow!("send_hello: expected hello, got something else")),
         }
     }
 
     pub async fn recv_hello(&mut self, id: Option<String>) -> Result<()> {
         use ControlMsg::*;
-        match self.recv().await.map_err(|e| anyhow!("recv_hello: could not recv: {}", e))? {
+        match self
+            .recv()
+            .await
+            .map_err(|e| anyhow!("recv_hello: could not recv: {}", e))?
+        {
             Some(ClHello(pid)) => {
                 self.peer = Some(pid);
                 Ok(())
-            },
+            }
             _ => Err(anyhow!("recv_hello: expected hello, got something else")),
         }?;
 
@@ -204,7 +202,9 @@ impl CtrlStream {
             CoHello
         };
 
-        self.send(hello_msg).await.map_err(|e| anyhow!("recv_hello: could not send: {}", e))
+        self.send(hello_msg)
+            .await
+            .map_err(|e| anyhow!("recv_hello: could not send: {}", e))
     }
 
     pub fn send(&mut self, msg: ControlMsg) -> SinkSend<CtrlSendStream, ControlMsg> {

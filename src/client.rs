@@ -1,9 +1,8 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT};
-use super::types::{CtrlStream, ConecConnection};
+use super::types::{ConecConnection, CtrlStream};
 
 use anyhow::{anyhow, Result};
-use futures::prelude::*;
-use quinn::{Certificate, ClientConfigBuilder, Incoming};
+use quinn::{Certificate, ClientConfigBuilder, Endpoint, Incoming};
 
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
@@ -42,8 +41,9 @@ impl ClientConfig {
 }
 
 pub struct Client {
-    network: ConecConnection,
+    endpoint: Endpoint,
     incoming: Incoming,
+    connection: ConecConnection,
     coord: CtrlStream,
     peers: Vec<CtrlStream>,
 }
@@ -61,30 +61,33 @@ impl Client {
             qcc.add_certificate_authority(ca)?;
         }
 
+        // build the QUIC endpoint
+        let mut endpoint = Endpoint::builder();
+        endpoint.default_client_config(qcc.build());
+        let (mut endpoint, incoming) = endpoint.bind(&"0.0.0.0:0".parse().unwrap())?;
+
         // set up the network endpoint and connect to the coordinator
-        let (network, incoming) = ConecConnection::connect(qcc.build(), &config.coord[..], config.port)
-            .await
-            .map_err(|e| anyhow!("failed to set up ConecConnection: {}", e))?;
+        let mut connection =
+            ConecConnection::connect(&mut endpoint, &config.coord[..], config.port)
+                .await
+                .map_err(|e| anyhow!("failed to set up coord connection: {}", e))?;
 
         // set up the control stream with the coordinator
-        let (cc_send, cc_recv) = network
-            .get_connection()
-            .open_bi()
+        let coord = connection
+            .connect_ctrl(config.id)
             .await
             .map_err(|e| anyhow!("failed to open coord control stream: {}", e))?;
-        let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
-        ctrl_stream.send_hello(config.id)
-            .await
-            .map_err(|e| anyhow!("error sending hello: {}", e))?;
 
         Ok(Client {
-            network,
+            endpoint,
             incoming,
-            coord: ctrl_stream,
-            peers: vec!(),
+            connection,
+            coord,
+            peers: vec![],
         })
     }
 
+    /*
     // probably don't need this for now
     pub async fn accept(&mut self) -> Result<ConecConnection> {
         let conn = self.incoming
@@ -93,6 +96,7 @@ impl Client {
             .ok_or(anyhow!("accept failed: unexpected end of Incoming stream"))?
             .await
             .map_err(|e| anyhow!("accept failed: {}", e))?;
-        Ok(ConecConnection::new(conn, self.network.clone_endpoint()))
+        Ok(ConecConnection::new(conn))
     }
+    */
 }
