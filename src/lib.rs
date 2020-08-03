@@ -3,6 +3,7 @@
  */
 pub mod client;
 pub mod coord;
+pub mod types;
 
 mod consts {
     pub(crate) const DFLT_PORT: u16 = 1719;

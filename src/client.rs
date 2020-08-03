@@ -1,14 +1,12 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT};
+use super::types::{CtrlStream, ConecConnection};
 
 use anyhow::{anyhow, Result};
-use quinn::{
-    Certificate, ClientConfigBuilder, Connection, Endpoint, Incoming, IncomingBiStreams,
-    IncomingUniStreams, NewConnection, SendStream, RecvStream,
-};
-use std::net::ToSocketAddrs;
+use quinn::{Certificate, ClientConfigBuilder};
 
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
+    id: String,
     coord: String,
     port: u16,
     keylog: bool,
@@ -16,8 +14,9 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
-    pub fn new(coord: String) -> Self {
+    pub fn new(id: String, coord: String) -> Self {
         ClientConfig {
+            id,
             coord,
             port: DFLT_PORT,
             keylog: false,
@@ -42,87 +41,43 @@ impl ClientConfig {
 }
 
 pub struct Client {
-    endpoint: Endpoint,
-    incoming: Incoming,
-    coordinator: CoordinatorChannel,
-    peers: Vec<ClientChannel>,
-}
-
-pub struct CoordinatorChannel {
-    connection: Connection,
-    iu_streams: IncomingUniStreams,
-    ib_streams: IncomingBiStreams,
-    control: InOutStream,
-}
-
-pub struct ClientChannel {
-    control: InOutStream,
-}
-
-pub struct InOutStream {
-    send: SendStream,
-    recv: RecvStream,
-}
-
-pub struct InStream {
-    recv: RecvStream,
-}
-
-pub struct OutStream {
-    send: SendStream,
+    network: ConecConnection,
+    coord: CtrlStream,
+    peers: Vec<CtrlStream>,
 }
 
 impl Client {
     /// Construct a new Client
     pub async fn new(config: ClientConfig) -> Result<Self> {
-        // build the default client configuration
-        let mut quinn_client_config = ClientConfigBuilder::default();
-        quinn_client_config.protocols(ALPN_CONEC);
+        // build the client configuration
+        let mut qcc = ClientConfigBuilder::default();
+        qcc.protocols(ALPN_CONEC);
         if config.keylog {
-            quinn_client_config.enable_keylog();
+            qcc.enable_keylog();
         }
         if let Some(ca) = config.extra_ca {
-            quinn_client_config.add_certificate_authority(ca)?;
+            qcc.add_certificate_authority(ca)?;
         }
 
-        // build the QUIC endpoint
-        let mut endpoint = Endpoint::builder();
-        endpoint.default_client_config(quinn_client_config.build());
-        let (endpoint, incoming) = endpoint.bind(&"0.0.0.0:0".parse().unwrap())?;
+        // set up the network endpoint and connect to the coordinator
+        let network = ConecConnection::connect(qcc.build(), &config.coord[..], config.port)
+            .await
+            .map_err(|e| anyhow!("failed to set up ConecConnection: {}", e))?;
 
-        // connect to the coordinator
-        let coord_addr = (&config.coord[..], config.port)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| anyhow!("could not resolve coordinator address"))?;
-        let NewConnection {
-            connection: conn,
-            uni_streams: u_str,
-            bi_streams: b_str,
-            ..
-        } = {
-            endpoint
-                .connect(&coord_addr, &config.coord[..])?
-                .await
-                .map_err(|e| anyhow!("failed to connect: {}", e))?
-        };
-        let (cc_send, cc_recv) = conn
+        // set up the control stream with the coordinator
+        let (cc_send, cc_recv) = network
+            .get_connection()
             .open_bi()
             .await
             .map_err(|e| anyhow!("failed to open coord control stream: {}", e))?;
+        let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
+        ctrl_stream.send_hello(config.id)
+            .await
+            .map_err(|e| anyhow!("error sending hello: {}", e))?;
 
         Ok(Client {
-            endpoint: endpoint,
-            incoming: incoming,
-            coordinator: CoordinatorChannel {
-                connection: conn,
-                iu_streams: u_str,
-                ib_streams: b_str,
-                control: InOutStream {
-                    send: cc_send,
-                    recv: cc_recv,
-                }
-            },
+            network,
+            coord: ctrl_stream,
             peers: vec!(),
         })
     }
