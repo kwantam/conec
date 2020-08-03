@@ -2,7 +2,8 @@ use super::consts::{ALPN_CONEC, DFLT_PORT};
 use super::types::{CtrlStream, ConecConnection};
 
 use anyhow::{anyhow, Result};
-use quinn::{Certificate, ClientConfigBuilder};
+use futures::prelude::*;
+use quinn::{Certificate, ClientConfigBuilder, Incoming};
 
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
@@ -42,6 +43,7 @@ impl ClientConfig {
 
 pub struct Client {
     network: ConecConnection,
+    incoming: Incoming,
     coord: CtrlStream,
     peers: Vec<CtrlStream>,
 }
@@ -60,7 +62,7 @@ impl Client {
         }
 
         // set up the network endpoint and connect to the coordinator
-        let network = ConecConnection::connect(qcc.build(), &config.coord[..], config.port)
+        let (network, incoming) = ConecConnection::connect(qcc.build(), &config.coord[..], config.port)
             .await
             .map_err(|e| anyhow!("failed to set up ConecConnection: {}", e))?;
 
@@ -77,8 +79,20 @@ impl Client {
 
         Ok(Client {
             network,
+            incoming,
             coord: ctrl_stream,
             peers: vec!(),
         })
+    }
+
+    // probably don't need this for now
+    pub async fn accept(&mut self) -> Result<ConecConnection> {
+        let conn = self.incoming
+            .next()
+            .await
+            .ok_or(anyhow!("accept failed: unexpected end of Incoming stream"))?
+            .await
+            .map_err(|e| anyhow!("accept failed: {}", e))?;
+        Ok(ConecConnection::new(conn, self.network.clone_endpoint()))
     }
 }

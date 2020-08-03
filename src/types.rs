@@ -14,7 +14,6 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub struct ConecConnection {
     endpoint: Endpoint,
-    incoming: Incoming,
     connection: Connection,
     iu_streams: IncomingUniStreams,
     ib_streams: IncomingBiStreams,
@@ -22,7 +21,7 @@ pub struct ConecConnection {
 }
 
 impl ConecConnection {
-    pub async fn connect(ccfg: ClientConfig, caddr: &str, cport: u16) -> Result<Self> {
+    pub async fn connect(ccfg: ClientConfig, caddr: &str, cport: u16) -> Result<(Self, Incoming)> {
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(ccfg);
@@ -33,29 +32,33 @@ impl ConecConnection {
             .to_socket_addrs()?
             .next()
             .ok_or_else(|| anyhow!("connect: could not resolve coordinator address"))?;
+        let nc =
+            endpoint
+                .connect(&coord_addr, caddr)?
+                .await
+                .map_err(|e| anyhow!("failed to connect: {}", e))?;
+        let ccon = ConecConnection::new(nc, endpoint);
+        Ok((ccon, incoming))
+    }
+
+    pub fn new(nc: NewConnection, ep: Endpoint) -> Self {
         let NewConnection {
             connection: conn,
             uni_streams: u_str,
             bi_streams: b_str,
             datagrams: dgrams,
             ..
-        } = {
-            endpoint
-                .connect(&coord_addr, caddr)?
-                .await
-                .map_err(|e| anyhow!("failed to connect: {}", e))?
-        };
-
-        Ok(ConecConnection {
-            endpoint: endpoint,
-            incoming: incoming,
+        } = nc;
+        ConecConnection {
+            endpoint: ep,
             connection: conn,
             iu_streams: u_str,
             ib_streams: b_str,
             datagrams: dgrams,
-        })
+        }
     }
 
+    /*
     pub async fn accept(&mut self) -> Result<NewConnection> {
         if let Some(conn) = self.incoming.next().await {
             Ok(conn.await.map_err(|e| anyhow!("accept failed: {}", e))?)
@@ -63,9 +66,14 @@ impl ConecConnection {
             Err(anyhow!("accept failed: unexpected end of stream"))
         }
     }
+    */
 
     pub fn get_connection(&self) -> &Connection {
         &self.connection
+    }
+
+    pub fn clone_endpoint(&self) -> Endpoint {
+        self.endpoint.clone()
     }
 }
 
