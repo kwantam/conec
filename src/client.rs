@@ -1,8 +1,9 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT};
-use super::types::{ConecConnection, CtrlStream};
+use super::types::{ConecChannel, ConecConnection, CtrlStream};
 
 use anyhow::{anyhow, Result};
 use quinn::{Certificate, ClientConfigBuilder, Endpoint, Incoming};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 #[derive(Clone, Debug)]
 pub struct ClientConfig {
@@ -11,6 +12,7 @@ pub struct ClientConfig {
     port: u16,
     keylog: bool,
     extra_ca: Option<Certificate>,
+    srcaddr: SocketAddr,
 }
 
 impl ClientConfig {
@@ -21,6 +23,7 @@ impl ClientConfig {
             port: DFLT_PORT,
             keylog: false,
             extra_ca: None,
+            srcaddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0),
         }
     }
 
@@ -38,14 +41,18 @@ impl ClientConfig {
         self.extra_ca = Some(ca);
         self
     }
+
+    pub fn set_srcaddr(&mut self, src: SocketAddr) -> &mut Self {
+        self.srcaddr = src;
+        self
+    }
 }
 
 pub struct Client {
     endpoint: Endpoint,
     incoming: Incoming,
-    connection: ConecConnection,
-    coord: CtrlStream,
-    peers: Vec<CtrlStream>,
+    coord: ConecChannel,
+    peers: Vec<CtrlStream>, // TODO: ConecChannel eventually
 }
 
 impl Client {
@@ -64,16 +71,15 @@ impl Client {
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(qcc.build());
-        let (mut endpoint, incoming) = endpoint.bind(&"0.0.0.0:0".parse().unwrap())?;
+        let (mut endpoint, incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
-        let mut connection =
-            ConecConnection::connect(&mut endpoint, &config.coord[..], config.port)
-                .await
-                .map_err(|e| anyhow!("failed to set up coord connection: {}", e))?;
+        let mut conn = ConecConnection::connect(&mut endpoint, &config.coord[..], config.port)
+            .await
+            .map_err(|e| anyhow!("failed to set up coord connection: {}", e))?;
 
         // set up the control stream with the coordinator
-        let coord = connection
+        let ctrl = conn
             .connect_ctrl(config.id)
             .await
             .map_err(|e| anyhow!("failed to open coord control stream: {}", e))?;
@@ -81,22 +87,8 @@ impl Client {
         Ok(Client {
             endpoint,
             incoming,
-            connection,
-            coord,
+            coord: ConecChannel { conn, ctrl },
             peers: vec![],
         })
     }
-
-    /*
-    // probably don't need this for now
-    pub async fn accept(&mut self) -> Result<ConecConnection> {
-        let conn = self.incoming
-            .next()
-            .await
-            .ok_or(anyhow!("accept failed: unexpected end of Incoming stream"))?
-            .await
-            .map_err(|e| anyhow!("accept failed: {}", e))?;
-        Ok(ConecConnection::new(conn))
-    }
-    */
 }

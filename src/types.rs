@@ -65,6 +65,21 @@ impl ConecConnection {
             .map_err(|e| anyhow!("connect_ctrl error sending hello: {}", e))?;
         Ok(ctrl_stream)
     }
+
+    pub async fn accept_ctrl(&mut self, id: Option<String>) -> Result<CtrlStream> {
+        let (cc_send, cc_recv) = self
+            .ib_streams
+            .next()
+            .await
+            .ok_or(anyhow!("accept_ctrl failed: unexpected end of stream"))?
+            .map_err(|e| anyhow!("accept_ctrl failed: {}", e))?;
+        let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
+        ctrl_stream
+            .recv_hello(id)
+            .await
+            .map_err(|e| anyhow!("accept_ctrl error getting hello: {}", e))?;
+        Ok(ctrl_stream)
+    }
 }
 
 pub type FramedRecvStream = FramedRead<RecvStream, LengthDelimitedCodec>;
@@ -214,4 +229,9 @@ impl CtrlStream {
     pub fn recv(&mut self) -> TryNext<CtrlRecvStream> {
         self.s_recv.try_next()
     }
+}
+
+pub struct ConecChannel {
+    pub(crate) conn: ConecConnection,
+    pub(crate) ctrl: CtrlStream,
 }
