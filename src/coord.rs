@@ -7,6 +7,7 @@ use quinn::{Certificate, CertificateChain, Endpoint, Incoming, PrivateKey, Serve
 use std::fs::read as fs_read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]
 pub struct CoordConfig {
@@ -58,10 +59,35 @@ impl CoordConfig {
     }
 }
 
-pub struct Coord {
+pub(crate) struct CoordInner {
     endpoint: Endpoint,
     incoming: Incoming,
     clients: Vec<ConecChannel>,
+}
+
+// a shared reference to a Coordinator
+pub(crate) struct CoordRef(Arc<Mutex<CoordInner>>);
+
+impl CoordRef {
+    pub(crate) fn new(endpoint: Endpoint, incoming: Incoming) -> Self {
+        Self(Arc::new(Mutex::new(CoordInner {
+            endpoint,
+            incoming,
+            clients: vec![],
+        })))
+    }
+}
+
+impl std::ops::Deref for CoordRef {
+    type Target = Mutex<CoordInner>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub struct Coord {
+    pub(crate) inner: CoordRef,
 }
 
 impl Coord {
@@ -82,16 +108,15 @@ impl Coord {
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
         Ok(Self {
-            endpoint,
-            incoming,
-            clients: vec![],
+            inner: CoordRef::new(endpoint, incoming)
         })
     }
 
     /// accept a new connection from a client
     pub async fn accept(&mut self) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap();
         let mut conn = ConecConnection::new(
-            self.incoming
+            inner.incoming
                 .next()
                 .await
                 .ok_or(anyhow!("accept failed: unexpected end of Incoming stream"))?
@@ -102,7 +127,7 @@ impl Coord {
             .accept_ctrl(None)
             .await
             .map_err(|e| anyhow!("failed to accept control stream: {}", e))?;
-        self.clients.push(ConecChannel { conn, ctrl });
+        inner.clients.push(ConecChannel { conn, ctrl });
         Ok(())
     }
 }
