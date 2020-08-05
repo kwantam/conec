@@ -34,7 +34,7 @@ impl CoordConfig {
                 CertificateChain::from_pem(&tmp)?
             }
         };
-        Ok(CoordConfig {
+        Ok(Self {
             laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
             keylog: false,
             cert,
@@ -81,7 +81,7 @@ impl Coord {
         endpoint.listen(qsc.build());
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        Ok(Coord {
+        Ok(Self {
             endpoint,
             incoming,
             clients: vec![],

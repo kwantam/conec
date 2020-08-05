@@ -17,7 +17,7 @@ pub struct ClientConfig {
 
 impl ClientConfig {
     pub fn new(id: String, coord: String) -> Self {
-        ClientConfig {
+        Self {
             id,
             coord,
             port: DFLT_PORT,
@@ -84,7 +84,7 @@ impl Client {
             .await
             .map_err(|e| anyhow!("failed to open coord control stream: {}", e))?;
 
-        Ok(Client {
+        Ok(Self {
             endpoint,
             incoming,
             coord: ConecChannel { conn, ctrl },

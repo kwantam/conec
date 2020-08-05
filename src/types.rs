@@ -29,7 +29,7 @@ impl ConecConnection {
             .ok_or_else(|| anyhow!("connect: could not resolve coordinator address"))?;
 
         // connect and return a ConecConnection
-        Ok(ConecConnection::new(
+        Ok(Self::new(
             endpoint
                 .connect(&coord_addr, caddr)?
                 .await
@@ -45,7 +45,7 @@ impl ConecConnection {
             datagrams: dgrams,
             ..
         } = nc;
-        ConecConnection {
+        Self {
             connection: conn,
             iu_streams: u_str,
             ib_streams: b_str,
@@ -139,15 +139,10 @@ impl InOutStream {
 // others can be sent by either
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ControlMsg {
-    CoHello,
-    ClHello(String),
-    /*  can we just close control stream, i.e., does peer learn about closed streams?
-    Close,
-    CloseAck,
-    */
-    CoData(String),
-    ClData(String),
-    Error(String),
+    CoHello,         // coordinator says hello
+    ClHello(String), // client with id: String says hello
+    NewStreamOut,    // sender wants a new sending stream
+    NewStreamIn,     // sender wants a new recving stream
 }
 
 type CtrlRecvStream =
