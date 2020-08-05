@@ -247,3 +247,8 @@ pub struct ConecChannel {
 }
 // TODO impl future for ConecChannel so that we can select_all over it
 //      future should return a ControlMsg --- should it do anything else?
+
+pub(crate) enum CoordEvent {
+    Accepted(ConecChannel),
+    Error(anyhow::Error),
+}

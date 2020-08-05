@@ -22,27 +22,25 @@ fn test_simple() {
         println!("starting server");
         let mut coord = {
             let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
-            //coord_cfg.enable_keylog();
-            Coord::new(coord_cfg)
-        }
-        .await
-        .unwrap();
+            Coord::new(coord_cfg).await.unwrap()
+        };
 
         // start client
         println!("starting client");
-        let jh = spawn(async move {
+        let mut client = {
             let mut client_cfg = ClientConfig::new("client".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert);
-            Client::new(client_cfg).await.unwrap();
-            time::delay_for(Duration::from_millis(20)).await;
-        });
+            Client::new(client_cfg).await.unwrap()
+        };
 
-        // accept on coord
-        println!("accepting control connection");
-        coord.accept().await.unwrap();
-        jh.await
-    })
-    .unwrap();
+        time::delay_for(Duration::from_millis(20)).await;
+        println!("clients connected: {}", coord.num_clients());
+        time::delay_for(Duration::from_millis(20)).await;
+        println!("clients connected: {}", coord.num_clients());
+        drop(client);
+        time::delay_for(Duration::from_millis(20)).await;
+        println!("clients connected: {}", coord.num_clients());
+    });
 }
 
 fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {

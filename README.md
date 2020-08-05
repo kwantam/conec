@@ -68,3 +68,12 @@ abstraction of multiple streams over a single network connection. For
 now, each Client will have a single QUIC connection to the Coordinator
 that handles all of that Client's channels. Later, we can make each
 channel a separate QUIC connection directly to the other endpoint.
+
+# TODOs / future features / nice-to-haves (not organized)
+
+- [ ] eliminate `anyhow` in favor of unboxed Error types
+- [ ] direct Client-to-Client channels
+- [ ] NAT detection / traversal
+- [ ] Client authentication and naming via pubkeys
+- [ ] Client naming schemes (e.g., Coord assigns, etc.)
+- [ ] Client <-> Coord streams API / pseudoclient at Coord
