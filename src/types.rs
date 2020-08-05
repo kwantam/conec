@@ -24,6 +24,7 @@ impl ConecConnection {
         // resolve address
         let coord_addr = (caddr, cport)
             .to_socket_addrs()?
+            .filter(|x| x.is_ipv4()) // XXX hack --- do we need to handle ipv6?
             .next()
             .ok_or_else(|| anyhow!("connect: could not resolve coordinator address"))?;
 
