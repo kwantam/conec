@@ -7,7 +7,7 @@ use quinn::{
     RecvStream, SendStream,
 };
 use serde::{Deserialize, Serialize};
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use tokio_serde::formats::SymmetricalBincode;
 use tokio_serde::SymmetricallyFramed;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -139,11 +139,25 @@ impl InOutStream {
 // others can be sent by either
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ControlMsg {
-    CoHello,         // coordinator says hello
-    ClHello(String), // client with id: String says hello
-    NewStreamOut,    // sender wants a new sending stream
-    NewStreamIn,     // sender wants a new recving stream
+    CoHello,
+    ClHello(String),
+    NewChanReq(String),
+    NewChan(SocketAddr),
+    NewInStream(Option<String>),
+    NewOutStream(Option<String>),
+    Error(String),
 }
+/*
+   Concept: client can ask for a proxied channel via coord or a direct connection
+
+   - StreamSend(None)           Coord  output stream
+   - StreamRecv(None)           Coord  input  stream
+   - StreamSend(Some("asdf"))   "asdf" output stream
+   - StreamRecv(Some("asdf"))   "asdf" input  stream
+
+   Note: coord can send these, too!
+
+*/
 
 type CtrlRecvStream =
     SymmetricallyFramed<FramedRecvStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
@@ -231,3 +245,5 @@ pub struct ConecChannel {
     pub(crate) conn: ConecConnection,
     pub(crate) ctrl: CtrlStream,
 }
+// TODO impl future for ConecChannel so that we can select_all over it
+//      future should return a ControlMsg --- should it do anything else?
