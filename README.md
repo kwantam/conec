@@ -69,11 +69,20 @@ now, each Client will have a single QUIC connection to the Coordinator
 that handles all of that Client's channels. Later, we can make each
 channel a separate QUIC connection directly to the other endpoint.
 
-# TODOs / future features / nice-to-haves (not organized)
+# TODOs / functionality / future features / maybes
 
-- [x] eliminate `anyhow` in favor of unboxed Error types
-- [ ] direct Client-to-Client channels
-- [ ] NAT detection / traversal
-- [ ] Client authentication and naming via pubkeys
-- [ ] Client naming schemes (e.g., Coord assigns, etc.)
-- [ ] Client <-> Coord streams API / pseudoclient at Coord
+- error handling
+    - [x] eliminate `anyhow` in favor of unboxed Error types
+    - [ ] create ConecError type to give better error msgs
+    - [ ] switch to ConecError
+- basic functionality
+    - [ ] per-channel driver @ Coordinator
+    - [ ] Client driver - what is the API for this?
+    - [ ] proxied streams through coordinator - ProxStream driver
+- future features
+    - [ ] direct Client-to-Client channels
+    - [ ] NAT detection / traversal
+    - [ ] Client authentication and naming via pubkeys
+- questions / maybes
+    - [ ] better Client naming (Coord assigns? etc.)
+    - [ ] Client <-> Coord streams? pseudoclient? alt: just spin up a Client
