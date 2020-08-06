@@ -200,6 +200,10 @@ impl CtrlStream {
         }
     }
 
+    pub fn get_peer(&self) -> &Option<String> {
+        &self.peer
+    }
+
     pub async fn send_hello(&mut self, id: String) -> io::Result<()> {
         use ControlMsg::*;
         self.send(ClHello(id)).await.map_err(|e| {

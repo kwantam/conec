@@ -27,11 +27,20 @@ fn test_simple() {
 
         // start client
         println!("starting client");
-        let client = {
-            let mut client_cfg = ClientConfig::new("client".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert);
-            Client::new(client_cfg).await.unwrap()
-        };
+        let mut client_cfg = ClientConfig::new("client".to_string(), "localhost".to_string());
+        client_cfg.set_ca(cert);
+        let client = Client::new(client_cfg.clone()).await.unwrap();
+
+        time::delay_for(Duration::from_millis(20)).await;
+        println!("clients connected: {}", coord.num_clients());
+        time::delay_for(Duration::from_millis(20)).await;
+        println!("clients connected: {}", coord.num_clients());
+        drop(client);
+        time::delay_for(Duration::from_millis(20)).await;
+        println!("clients connected: {}", coord.num_clients());
+
+        // should generate a failure (eventually)
+        let client = Client::new(client_cfg).await.unwrap();
 
         time::delay_for(Duration::from_millis(20)).await;
         println!("clients connected: {}", coord.num_clients());

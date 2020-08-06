@@ -1,9 +1,10 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT, MAX_LOOPS};
-use super::types::{ConecChannel, ConecConnection, CoordEvent};
+use super::types::{ConecChannel, ConecConnection, CoordEvent, ControlMsg};
 
 use futures::channel::mpsc;
 use futures::prelude::*;
 use quinn::{Certificate, CertificateChain, Endpoint, Incoming, PrivateKey, ServerConfigBuilder};
+use std::collections::HashMap;
 use std::fs::read as fs_read;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -70,7 +71,7 @@ impl CoordConfig {
 pub(crate) struct CoordInner {
     endpoint: Endpoint,
     incoming: Incoming,
-    clients: Vec<ConecChannel>,
+    clients: HashMap<String, ConecChannel>,
     driver: Option<task::Waker>,
     ref_count: usize,
     sender: mpsc::UnboundedSender<CoordEvent>,
@@ -137,8 +138,22 @@ impl CoordInner {
         loop {
             match self.events.poll_next_unpin(cx) {
                 Poll::Ready(Some(event)) => match event {
-                    Error(e) => println!("err: {}", e),
-                    Accepted(c) => self.clients.push(c),
+                    Error(e) => {
+                        // XXX what do we do here?
+                        println!("err: {}", e);
+                    },
+                    Accepted(mut c) => {
+                        // Note: unwrapping get_peer() is OK --- peer is a client, not a Coord
+                        if self.clients.get(c.ctrl.get_peer().as_ref().unwrap()).is_some() {
+                            tokio::spawn(async move {
+                                println!("error name already in use");
+                                c.ctrl.send(ControlMsg::Error("name already in use".to_string())).await.ok();
+                            });
+                        } else {
+                            let key = c.ctrl.get_peer().clone().unwrap();
+                            self.clients.insert(key, c);
+                        }
+                    },
                 },
                 Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
                 Poll::Pending => break,
@@ -156,7 +171,7 @@ impl CoordRef {
         Self(Arc::new(Mutex::new(CoordInner {
             endpoint,
             incoming,
-            clients: vec![],
+            clients: HashMap::new(),
             driver: None,
             ref_count: 0,
             sender,
