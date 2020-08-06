@@ -76,6 +76,7 @@ channel a separate QUIC connection directly to the other endpoint.
     - [ ] create ConecError type to give better error msgs
     - [ ] switch to ConecError
 - basic functionality
+    - [ ] Client connection: switch handshake order, detect dup-id earlier
     - [ ] per-channel driver @ Coordinator
     - [ ] Client driver - what is the API for this?
     - [ ] proxied streams through coordinator - ProxStream driver
