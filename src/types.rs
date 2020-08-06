@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Result};
 use futures::prelude::*;
 use futures::sink::Send as SinkSend;
 use futures::stream::TryNext;
@@ -7,6 +6,7 @@ use quinn::{
     RecvStream, SendStream,
 };
 use serde::{Deserialize, Serialize};
+use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use tokio_serde::formats::SymmetricalBincode;
 use tokio_serde::SymmetricallyFramed;
@@ -20,20 +20,26 @@ pub struct ConecConnection {
 }
 
 impl ConecConnection {
-    pub async fn connect(endpoint: &mut Endpoint, caddr: &str, cport: u16) -> Result<Self> {
+    pub async fn connect(endpoint: &mut Endpoint, caddr: &str, cport: u16) -> io::Result<Self> {
         // resolve address
         let coord_addr = (caddr, cport)
             .to_socket_addrs()?
             .filter(|x| x.is_ipv4()) // XXX hack --- do we need to handle ipv6?
             .next()
-            .ok_or_else(|| anyhow!("connect: could not resolve coordinator address"))?;
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::AddrNotAvailable,
+                    "could not resolve coordinator address",
+                )
+            })?;
 
         // connect and return a ConecConnection
         Ok(Self::new(
             endpoint
-                .connect(&coord_addr, caddr)?
+                .connect(&coord_addr, caddr)
+                .map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?
                 .await
-                .map_err(|e| anyhow!("failed to connect: {}", e))?,
+                .map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?,
         ))
     }
 
@@ -53,32 +59,41 @@ impl ConecConnection {
         }
     }
 
-    pub async fn connect_ctrl(&mut self, id: String) -> Result<CtrlStream> {
-        let (cc_send, cc_recv) = self
-            .connection
-            .open_bi()
-            .await
-            .map_err(|e| anyhow!("connect_ctrl failed: {}", e))?;
+    pub async fn connect_ctrl(&mut self, id: String) -> io::Result<CtrlStream> {
+        let (cc_send, cc_recv) = self.connection.open_bi().await.map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("connect_ctrl failed: {}", e))
+        })?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
-        ctrl_stream
-            .send_hello(id)
-            .await
-            .map_err(|e| anyhow!("connect_ctrl error sending hello: {}", e))?;
+        ctrl_stream.send_hello(id).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("connect_ctrl error sending hello: {}", e),
+            )
+        })?;
         Ok(ctrl_stream)
     }
 
-    pub async fn accept_ctrl(&mut self, id: Option<String>) -> Result<CtrlStream> {
+    pub async fn accept_ctrl(&mut self, id: Option<String>) -> io::Result<CtrlStream> {
         let (cc_send, cc_recv) = self
             .ib_streams
             .next()
             .await
-            .ok_or(anyhow!("accept_ctrl failed: unexpected end of stream"))?
-            .map_err(|e| anyhow!("accept_ctrl failed: {}", e))?;
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("accept_ctrl failed: unexpected end of stream"),
+                )
+            })?
+            .map_err(|e| {
+                io::Error::new(io::ErrorKind::Other, format!("accept_ctrl failed: {}", e))
+            })?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
-        ctrl_stream
-            .recv_hello(id)
-            .await
-            .map_err(|e| anyhow!("accept_ctrl error getting hello: {}", e))?;
+        ctrl_stream.recv_hello(id).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("accept_ctrl error getting hello: {}", e),
+            )
+        })?;
         Ok(ctrl_stream)
     }
 }
@@ -185,16 +200,20 @@ impl CtrlStream {
         }
     }
 
-    pub async fn send_hello(&mut self, id: String) -> Result<()> {
+    pub async fn send_hello(&mut self, id: String) -> io::Result<()> {
         use ControlMsg::*;
-        self.send(ClHello(id))
-            .await
-            .map_err(|e| anyhow!("send_hello: could not send: {}", e))?;
-        match self
-            .recv()
-            .await
-            .map_err(|e| anyhow!("send_hello: could not recv: {}", e))?
-        {
+        self.send(ClHello(id)).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("send_hello: could not send: {}", e),
+            )
+        })?;
+        match self.recv().await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("send_hello: could not recv: {}", e),
+            )
+        })? {
             Some(CoHello) => {
                 self.peer = None;
                 Ok(())
@@ -203,22 +222,29 @@ impl CtrlStream {
                 self.peer = Some(pid);
                 Ok(())
             }
-            _ => Err(anyhow!("send_hello: expected hello, got something else")),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("send_hello: expected hello, got something else"),
+            )),
         }
     }
 
-    pub async fn recv_hello(&mut self, id: Option<String>) -> Result<()> {
+    pub async fn recv_hello(&mut self, id: Option<String>) -> io::Result<()> {
         use ControlMsg::*;
-        match self
-            .recv()
-            .await
-            .map_err(|e| anyhow!("recv_hello: could not recv: {}", e))?
-        {
+        match self.recv().await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("recv_hello: could not recv: {}", e),
+            )
+        })? {
             Some(ClHello(pid)) => {
                 self.peer = Some(pid);
                 Ok(())
             }
-            _ => Err(anyhow!("recv_hello: expected hello, got something else")),
+            _ => Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("recv_hello: expected hello, got something else"),
+            )),
         }?;
 
         let hello_msg = if let Some(mid) = id {
@@ -227,9 +253,12 @@ impl CtrlStream {
             CoHello
         };
 
-        self.send(hello_msg)
-            .await
-            .map_err(|e| anyhow!("recv_hello: could not send: {}", e))
+        self.send(hello_msg).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("recv_hello: could not send: {}", e),
+            )
+        })
     }
 
     pub fn send(&mut self, msg: ControlMsg) -> SinkSend<CtrlSendStream, ControlMsg> {
@@ -250,5 +279,5 @@ pub struct ConecChannel {
 
 pub(crate) enum CoordEvent {
     Accepted(ConecChannel),
-    Error(anyhow::Error),
+    Error(io::Error),
 }

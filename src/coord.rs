@@ -1,11 +1,11 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT, MAX_LOOPS};
 use super::types::{ConecChannel, ConecConnection, CoordEvent};
 
-use anyhow::{anyhow, Context, Result};
 use futures::channel::mpsc;
 use futures::prelude::*;
 use quinn::{Certificate, CertificateChain, Endpoint, Incoming, PrivateKey, ServerConfigBuilder};
 use std::fs::read as fs_read;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -21,21 +21,26 @@ pub struct CoordConfig {
 }
 
 impl CoordConfig {
-    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> Result<Self> {
+    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> io::Result<Self> {
         let key = {
-            let tmp = fs_read(&key_path).context("failed to read private key")?;
+            let tmp = fs_read(&key_path).map_err(|e| {
+                io::Error::new(e.kind(), format!("failed to read private key: {}", e))
+            })?;
             if key_path.extension().map_or(false, |x| x == "der") {
-                PrivateKey::from_der(&tmp)?
+                PrivateKey::from_der(&tmp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
             } else {
-                PrivateKey::from_pem(&tmp)?
+                PrivateKey::from_pem(&tmp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
             }
         };
         let cert = {
-            let tmp = fs_read(&cert_path).context("failed to read certificate chain")?;
+            let tmp = fs_read(&cert_path).map_err(|e| {
+                io::Error::new(e.kind(), format!("failed to read certificate chain: {}", e))
+            })?;
             if cert_path.extension().map_or(false, |x| x == "der") {
                 CertificateChain::from_certs(Certificate::from_der(&tmp))
             } else {
-                CertificateChain::from_pem(&tmp)?
+                CertificateChain::from_pem(&tmp)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
             }
         };
         Ok(Self {
@@ -74,7 +79,7 @@ pub(crate) struct CoordInner {
 
 impl CoordInner {
     /// try to accept a new connection from a client
-    fn drive_accept(&mut self, cx: &mut task::Context) -> Result<bool> {
+    fn drive_accept(&mut self, cx: &mut task::Context) -> io::Result<bool> {
         let mut accepted = 0;
         //let mut incoming_p = Pin::new(&mut *self.incoming);
         loop {
@@ -82,24 +87,29 @@ impl CoordInner {
             match self.incoming.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => {
-                    return Err(anyhow!("accept failed: unexpected end of Incoming stream"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "accept failed: unexpected end of Incoming stream",
+                    ));
                 }
                 Poll::Ready(Some(incoming)) => {
                     let sender = self.sender.clone();
                     tokio::spawn(async move {
-                        let mut conn =
-                            match incoming.await.map_err(|e| anyhow!("accept failed: {}", e)) {
-                                Err(e) => {
-                                    sender.unbounded_send(CoordEvent::Error(e)).unwrap();
-                                    return;
-                                }
-                                Ok(conn) => ConecConnection::new(conn),
-                            };
-                        let ctrl = match conn
-                            .accept_ctrl(None)
-                            .await
-                            .map_err(|e| anyhow!("failed to accept control stream: {}", e))
-                        {
+                        let mut conn = match incoming.await.map_err(|e| {
+                            io::Error::new(io::ErrorKind::Other, format!("accept failed: {}", e))
+                        }) {
+                            Err(e) => {
+                                sender.unbounded_send(CoordEvent::Error(e)).unwrap();
+                                return;
+                            }
+                            Ok(conn) => ConecConnection::new(conn),
+                        };
+                        let ctrl = match conn.accept_ctrl(None).await.map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                format!("failed to accept control stream: {}", e),
+                            )
+                        }) {
                             Err(e) => {
                                 sender.unbounded_send(CoordEvent::Error(e)).unwrap();
                                 return;
@@ -190,7 +200,7 @@ pub struct Coord {
 
 impl Coord {
     /// construct a new coord
-    pub async fn new(config: CoordConfig) -> Result<Self> {
+    pub async fn new(config: CoordConfig) -> io::Result<Self> {
         // build configuration
         let mut qsc = ServerConfigBuilder::default();
         qsc.protocols(ALPN_CONEC);
@@ -198,20 +208,19 @@ impl Coord {
         if config.keylog {
             qsc.enable_keylog();
         }
-        qsc.certificate(config.cert, config.key)?;
+        qsc.certificate(config.cert, config.key)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         // build QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.listen(qsc.build());
-        let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
+        let (endpoint, incoming) = endpoint
+            .bind(&config.laddr)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         let inner = CoordRef::new(endpoint, incoming);
         let driver = CoordDriver(inner.clone());
-        tokio::spawn(async move {
-            if let Err(e) = driver.await {
-                anyhow!("coordinator error: {}", e);
-            }
-        });
+        tokio::spawn(async move { driver.await });
 
         Ok(Self { inner })
     }
@@ -226,7 +235,7 @@ impl Coord {
 pub(crate) struct CoordDriver(CoordRef);
 
 impl Future for CoordDriver {
-    type Output = Result<()>;
+    type Output = io::Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context) -> task::Poll<Self::Output> {
         let inner = &mut *self.0.lock().unwrap();

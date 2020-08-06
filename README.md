@@ -71,7 +71,7 @@ channel a separate QUIC connection directly to the other endpoint.
 
 # TODOs / future features / nice-to-haves (not organized)
 
-- [ ] eliminate `anyhow` in favor of unboxed Error types
+- [x] eliminate `anyhow` in favor of unboxed Error types
 - [ ] direct Client-to-Client channels
 - [ ] NAT detection / traversal
 - [ ] Client authentication and naming via pubkeys

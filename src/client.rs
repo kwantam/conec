@@ -1,8 +1,8 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT};
 use super::types::{ConecChannel, ConecConnection, CtrlStream};
 
-use anyhow::{anyhow, Result};
 use quinn::{Certificate, ClientConfigBuilder, Endpoint, Incoming};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 #[derive(Clone, Debug)]
@@ -57,7 +57,7 @@ pub struct Client {
 
 impl Client {
     /// Construct a new Client
-    pub async fn new(config: ClientConfig) -> Result<Self> {
+    pub async fn new(config: ClientConfig) -> io::Result<Self> {
         // build the client configuration
         let mut qcc = ClientConfigBuilder::default();
         qcc.protocols(ALPN_CONEC);
@@ -65,24 +65,34 @@ impl Client {
             qcc.enable_keylog();
         }
         if let Some(ca) = config.extra_ca {
-            qcc.add_certificate_authority(ca)?;
+            qcc.add_certificate_authority(ca)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         }
 
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(qcc.build());
-        let (mut endpoint, incoming) = endpoint.bind(&config.srcaddr)?;
+        let (mut endpoint, incoming) = endpoint
+            .bind(&config.srcaddr)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         // set up the network endpoint and connect to the coordinator
         let mut conn = ConecConnection::connect(&mut endpoint, &config.coord[..], config.port)
             .await
-            .map_err(|e| anyhow!("failed to set up coord connection: {}", e))?;
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to set up coord connection: {}", e),
+                )
+            })?;
 
         // set up the control stream with the coordinator
-        let ctrl = conn
-            .connect_ctrl(config.id)
-            .await
-            .map_err(|e| anyhow!("failed to open coord control stream: {}", e))?;
+        let ctrl = conn.connect_ctrl(config.id).await.map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("failed to open coord control stream: {}", e),
+            )
+        })?;
 
         Ok(Self {
             endpoint,

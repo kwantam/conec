@@ -6,7 +6,7 @@ use quinn::Certificate;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, io};
-use tokio::{runtime, spawn, time};
+use tokio::{runtime, time};
 use unwrap::unwrap;
 
 #[test]
@@ -20,14 +20,14 @@ fn test_simple() {
     rt.block_on(async move {
         // start server
         println!("starting server");
-        let mut coord = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+        let coord = {
+            let coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
             Coord::new(coord_cfg).await.unwrap()
         };
 
         // start client
         println!("starting client");
-        let mut client = {
+        let client = {
             let mut client_cfg = ClientConfig::new("client".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert);
             Client::new(client_cfg).await.unwrap()
