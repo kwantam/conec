@@ -21,7 +21,8 @@ fn test_simple() {
         // start server
         println!("starting server");
         let coord = {
-            let coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
             Coord::new(coord_cfg).await.unwrap()
         };
 

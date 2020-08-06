@@ -21,25 +21,24 @@ pub struct ConecConnection {
 
 impl ConecConnection {
     pub async fn connect(endpoint: &mut Endpoint, caddr: &str, cport: u16) -> io::Result<Self> {
-        // resolve address
-        let coord_addr = (caddr, cport)
+        // only attempt to connect to an address of the same type as the endpoint's local socket
+        let use_ipv4 = endpoint.local_addr()?.is_ipv4();
+        for coord_addr in (caddr, cport)
             .to_socket_addrs()?
-            .filter(|x| x.is_ipv4()) // XXX hack --- do we need to handle ipv6?
-            .next()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::AddrNotAvailable,
-                    "could not resolve coordinator address",
-                )
-            })?;
-
-        // connect and return a ConecConnection
-        Ok(Self::new(
-            endpoint
+            .filter(|x| use_ipv4 == x.is_ipv4())
+        {
+            match endpoint
                 .connect(&coord_addr, caddr)
                 .map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?,
+            {
+                Err(_) => continue,
+                Ok(c) => return Ok(Self::new(c)),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "could not connect to coordinator",
         ))
     }
 

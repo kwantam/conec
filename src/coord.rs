@@ -1,5 +1,5 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT, MAX_LOOPS};
-use super::types::{ConecChannel, ConecConnection, CoordEvent, ControlMsg};
+use super::types::{ConecChannel, ConecConnection, ControlMsg, CoordEvent};
 
 use futures::channel::mpsc;
 use futures::prelude::*;
@@ -17,6 +17,7 @@ use std::task;
 pub struct CoordConfig {
     laddr: SocketAddr,
     keylog: bool,
+    stateless_retry: bool,
     cert: CertificateChain,
     key: PrivateKey,
 }
@@ -47,6 +48,7 @@ impl CoordConfig {
         Ok(Self {
             laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
             keylog: false,
+            stateless_retry: false,
             cert,
             key,
         })
@@ -62,8 +64,15 @@ impl CoordConfig {
         self
     }
 
+    // log master secret to ENV{SSLKEYLOGFILE}
     pub fn enable_keylog(&mut self) -> &mut Self {
         self.keylog = true;
+        self
+    }
+
+    // Per QUIC spec, stateless retry defends against client address spoofing.
+    pub fn enable_stateless_retry(&mut self) -> &mut Self {
+        self.stateless_retry = true;
         self
     }
 }
@@ -141,19 +150,26 @@ impl CoordInner {
                     Error(e) => {
                         // XXX what do we do here?
                         println!("err: {}", e);
-                    },
+                    }
                     Accepted(mut c) => {
                         // Note: unwrapping get_peer() is OK --- peer is a client, not a Coord
-                        if self.clients.get(c.ctrl.get_peer().as_ref().unwrap()).is_some() {
+                        if self
+                            .clients
+                            .get(c.ctrl.get_peer().as_ref().unwrap())
+                            .is_some()
+                        {
                             tokio::spawn(async move {
                                 println!("error name already in use");
-                                c.ctrl.send(ControlMsg::Error("name already in use".to_string())).await.ok();
+                                c.ctrl
+                                    .send(ControlMsg::Error("name already in use".to_string()))
+                                    .await
+                                    .ok();
                             });
                         } else {
                             let key = c.ctrl.get_peer().clone().unwrap();
                             self.clients.insert(key, c);
                         }
-                    },
+                    }
                 },
                 Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
                 Poll::Pending => break,
@@ -219,7 +235,7 @@ impl Coord {
         // build configuration
         let mut qsc = ServerConfigBuilder::default();
         qsc.protocols(ALPN_CONEC);
-        // qsc.use_stateless_retry(true); // XXX ???
+        qsc.use_stateless_retry(config.stateless_retry);
         if config.keylog {
             qsc.enable_keylog();
         }
