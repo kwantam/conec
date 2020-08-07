@@ -1,145 +1,21 @@
-use super::consts::{ALPN_CONEC, DFLT_PORT, MAX_LOOPS};
-use super::types::{ConecConnection, ControlMsg, CtrlStream};
+mod chan;
+pub(crate) mod config;
+
+use crate::consts::{ALPN_CONEC, MAX_LOOPS};
+use crate::types::{ConecConnection, ControlMsg, CtrlStream};
+use chan::{CoordChan, CoordChanRef};
+use config::CoordConfig;
 
 use futures::channel::mpsc;
 use futures::prelude::*;
-use quinn::{Certificate, CertificateChain, Endpoint, Incoming, PrivateKey, ServerConfigBuilder};
+use quinn::{Endpoint, Incoming, ServerConfigBuilder};
 use std::collections::HashMap;
-use std::fs::read as fs_read;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task;
 
-#[derive(Clone, Debug)]
-pub struct CoordConfig {
-    laddr: SocketAddr,
-    keylog: bool,
-    stateless_retry: bool,
-    cert: CertificateChain,
-    key: PrivateKey,
-}
-
-impl CoordConfig {
-    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> io::Result<Self> {
-        let key = {
-            let tmp = fs_read(&key_path).map_err(|e| {
-                io::Error::new(e.kind(), format!("failed to read private key: {}", e))
-            })?;
-            if key_path.extension().map_or(false, |x| x == "der") {
-                PrivateKey::from_der(&tmp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
-            } else {
-                PrivateKey::from_pem(&tmp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
-            }
-        };
-        let cert = {
-            let tmp = fs_read(&cert_path).map_err(|e| {
-                io::Error::new(e.kind(), format!("failed to read certificate chain: {}", e))
-            })?;
-            if cert_path.extension().map_or(false, |x| x == "der") {
-                CertificateChain::from_certs(Certificate::from_der(&tmp))
-            } else {
-                CertificateChain::from_pem(&tmp)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
-            }
-        };
-        Ok(Self {
-            laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
-            keylog: false,
-            stateless_retry: false,
-            cert,
-            key,
-        })
-    }
-
-    pub fn set_port(&mut self, port: u16) -> &mut Self {
-        self.laddr.set_port(port);
-        self
-    }
-
-    pub fn set_ip(&mut self, ip: IpAddr) -> &mut Self {
-        self.laddr.set_ip(ip);
-        self
-    }
-
-    // log master secret to ENV{SSLKEYLOGFILE}
-    pub fn enable_keylog(&mut self) -> &mut Self {
-        self.keylog = true;
-        self
-    }
-
-    // Per QUIC spec, stateless retry defends against client address spoofing.
-    pub fn enable_stateless_retry(&mut self) -> &mut Self {
-        self.stateless_retry = true;
-        self
-    }
-}
-
-struct CoordChanInner {
-    conn: ConecConnection,
-    ctrl: CtrlStream,
-    peer: String,
-    sender: mpsc::UnboundedSender<CoordEvent>,
-    ref_count: usize,
-    driver: Option<task::Waker>,
-}
-
-struct CoordChanRef(Arc<Mutex<CoordChanInner>>);
-
-impl std::ops::Deref for CoordChanRef {
-    type Target = Mutex<CoordChanInner>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Clone for CoordChanRef {
-    fn clone(&self) -> Self {
-        self.lock().unwrap().ref_count += 1;
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for CoordChanRef {
-    fn drop(&mut self) {
-        let inner = &mut *self.0.lock().unwrap();
-        if let Some(x) = inner.ref_count.checked_sub(1) {
-            inner.ref_count = x;
-            if x == 0 {
-                if let Some(task) = inner.driver.take() {
-                    task.wake();
-                }
-            }
-        }
-    }
-}
-
-impl CoordChanRef {
-    fn new(
-        conn: ConecConnection,
-        ctrl: CtrlStream,
-        peer: String,
-        sender: mpsc::UnboundedSender<CoordEvent>,
-    ) -> Self {
-        Self(Arc::new(Mutex::new(CoordChanInner {
-            conn,
-            ctrl,
-            peer,
-            sender,
-            ref_count: 0,
-            driver: None,
-        })))
-    }
-}
-
-pub struct CoordChan {
-    inner: CoordChanRef,
-}
-
-enum CoordEvent {
+pub(crate) enum CoordEvent {
     Accepted(ConecConnection, CtrlStream, String),
     Error(io::Error),
 }

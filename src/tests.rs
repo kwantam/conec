@@ -1,5 +1,4 @@
-use super::client::{Client, ClientConfig};
-use super::coord::{Coord, CoordConfig};
+use crate::{Client, ClientConfig, Coord, CoordConfig};
 
 use anyhow::Context;
 use quinn::Certificate;
