@@ -1,5 +1,5 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT, MAX_LOOPS};
-use super::types::{ConecChannel, ConecConnection, ControlMsg, CoordEvent};
+use super::types::{ConecConnection, ControlMsg, CtrlStream};
 
 use futures::channel::mpsc;
 use futures::prelude::*;
@@ -77,10 +77,77 @@ impl CoordConfig {
     }
 }
 
+struct CoordChanInner {
+    conn: ConecConnection,
+    ctrl: CtrlStream,
+    peer: String,
+    sender: mpsc::UnboundedSender<CoordEvent>,
+    ref_count: usize,
+    driver: Option<task::Waker>,
+}
+
+struct CoordChanRef(Arc<Mutex<CoordChanInner>>);
+
+impl std::ops::Deref for CoordChanRef {
+    type Target = Mutex<CoordChanInner>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Clone for CoordChanRef {
+    fn clone(&self) -> Self {
+        self.lock().unwrap().ref_count += 1;
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for CoordChanRef {
+    fn drop(&mut self) {
+        let inner = &mut *self.0.lock().unwrap();
+        if let Some(x) = inner.ref_count.checked_sub(1) {
+            inner.ref_count = x;
+            if x == 0 {
+                if let Some(task) = inner.driver.take() {
+                    task.wake();
+                }
+            }
+        }
+    }
+}
+
+impl CoordChanRef {
+    fn new(
+        conn: ConecConnection,
+        ctrl: CtrlStream,
+        peer: String,
+        sender: mpsc::UnboundedSender<CoordEvent>,
+    ) -> Self {
+        Self(Arc::new(Mutex::new(CoordChanInner {
+            conn,
+            ctrl,
+            peer,
+            sender,
+            ref_count: 0,
+            driver: None,
+        })))
+    }
+}
+
+pub struct CoordChan {
+    inner: CoordChanRef,
+}
+
+enum CoordEvent {
+    Accepted(ConecConnection, CtrlStream, String),
+    Error(io::Error),
+}
+
 pub(crate) struct CoordInner {
     endpoint: Endpoint,
     incoming: Incoming,
-    clients: HashMap<String, ConecChannel>,
+    clients: HashMap<String, CoordChan>,
     driver: Option<task::Waker>,
     ref_count: usize,
     sender: mpsc::UnboundedSender<CoordEvent>,
@@ -114,7 +181,7 @@ impl CoordInner {
                             }
                             Ok(conn) => ConecConnection::new(conn),
                         };
-                        let ctrl = match conn.accept_ctrl(None).await.map_err(|e| {
+                        let (ctrl, peer) = match conn.accept_ctrl(None).await.map_err(|e| {
                             io::Error::new(
                                 io::ErrorKind::Other,
                                 format!("failed to accept control stream: {}", e),
@@ -124,10 +191,10 @@ impl CoordInner {
                                 sender.unbounded_send(CoordEvent::Error(e)).unwrap();
                                 return;
                             }
-                            Ok(ctrl) => ctrl,
+                            Ok(ctrl_peer) => ctrl_peer,
                         };
                         sender
-                            .unbounded_send(CoordEvent::Accepted(ConecChannel { conn, ctrl }))
+                            .unbounded_send(CoordEvent::Accepted(conn, ctrl, peer))
                             .unwrap();
                     });
                 }
@@ -151,23 +218,22 @@ impl CoordInner {
                         // XXX what do we do here?
                         println!("err: {}", e);
                     }
-                    Accepted(mut c) => {
+                    Accepted(conn, mut ctrl, peer) => {
                         // Note: unwrapping get_peer() is OK --- peer is a client, not a Coord
-                        if self
-                            .clients
-                            .get(c.ctrl.get_peer().as_ref().unwrap())
-                            .is_some()
-                        {
+                        if self.clients.get(&peer[..]).is_some() {
                             tokio::spawn(async move {
-                                println!("error name already in use");
-                                c.ctrl
-                                    .send(ControlMsg::Error("name already in use".to_string()))
+                                println!("error: name '{}' already in use", peer);
+                                ctrl.send(ControlMsg::Error("name already in use".to_string()))
                                     .await
                                     .ok();
+                                drop(ctrl);
+                                drop(conn);
                             });
                         } else {
-                            let key = c.ctrl.get_peer().clone().unwrap();
-                            self.clients.insert(key, c);
+                            let inner =
+                                CoordChanRef::new(conn, ctrl, peer.clone(), self.sender.clone());
+                            // XXX start driver here
+                            self.clients.insert(peer, CoordChan { inner });
                         }
                     }
                 },
@@ -226,7 +292,7 @@ impl std::ops::Deref for CoordRef {
 }
 
 pub struct Coord {
-    pub(crate) inner: CoordRef,
+    inner: CoordRef,
 }
 
 impl Coord {

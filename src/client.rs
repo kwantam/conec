@@ -1,5 +1,5 @@
 use super::consts::{ALPN_CONEC, DFLT_PORT};
-use super::types::{ConecChannel, ConecConnection, CtrlStream};
+use super::types::{ConecConnection, CtrlStream};
 
 use quinn::{Certificate, ClientConfigBuilder, Endpoint, Incoming};
 use std::io;
@@ -48,11 +48,16 @@ impl ClientConfig {
     }
 }
 
+struct ClientChan {
+    conn: ConecConnection,
+    ctrl: CtrlStream,
+    peer: Option<String>,
+}
+
 pub struct Client {
     endpoint: Endpoint,
     incoming: Incoming,
-    coord: ConecChannel,
-    peers: Vec<CtrlStream>, // TODO: ConecChannel eventually
+    coord: ClientChan,
 }
 
 impl Client {
@@ -87,7 +92,7 @@ impl Client {
             })?;
 
         // set up the control stream with the coordinator
-        let ctrl = conn.connect_ctrl(config.id).await.map_err(|e| {
+        let (ctrl, peer) = conn.connect_ctrl(config.id).await.map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("failed to open coord control stream: {}", e),
@@ -97,8 +102,7 @@ impl Client {
         Ok(Self {
             endpoint,
             incoming,
-            coord: ConecChannel { conn, ctrl },
-            peers: vec![],
+            coord: ClientChan { conn, ctrl, peer },
         })
     }
 }
