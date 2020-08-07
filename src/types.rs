@@ -1,13 +1,13 @@
 use futures::prelude::*;
-use futures::sink::Send as SinkSend;
-use futures::stream::TryNext;
 use quinn::{
-    Connection, Datagrams, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection,
-    RecvStream, SendStream,
+    Connection, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection, RecvStream,
+    SendStream,
 };
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio_serde::formats::SymmetricalBincode;
 use tokio_serde::SymmetricallyFramed;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -16,7 +16,6 @@ pub struct ConecConnection {
     connection: Connection,
     iu_streams: IncomingUniStreams,
     ib_streams: IncomingBiStreams,
-    datagrams: Datagrams,
 }
 
 impl ConecConnection {
@@ -47,14 +46,12 @@ impl ConecConnection {
             connection: conn,
             uni_streams: u_str,
             bi_streams: b_str,
-            datagrams: dgrams,
             ..
         } = nc;
         Self {
             connection: conn,
             iu_streams: u_str,
             ib_streams: b_str,
-            datagrams: dgrams,
         }
     }
 
@@ -205,7 +202,7 @@ impl CtrlStream {
                 format!("send_hello: could not send: {}", e),
             )
         })?;
-        match self.recv().await.map_err(|e| {
+        match self.try_next().await.map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("send_hello: could not recv: {}", e),
@@ -222,7 +219,7 @@ impl CtrlStream {
 
     pub async fn recv_hello(&mut self, id: Option<String>) -> io::Result<String> {
         use ControlMsg::*;
-        let peer = match self.recv().await.map_err(|e| {
+        let peer = match self.try_next().await.map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("recv_hello: could not recv: {}", e),
@@ -251,12 +248,32 @@ impl CtrlStream {
         })?;
         Ok(peer)
     }
+}
 
-    pub fn send(&mut self, msg: ControlMsg) -> SinkSend<CtrlSendStream, ControlMsg> {
-        self.s_send.send(msg)
+impl Stream for CtrlStream {
+    type Item = io::Result<ControlMsg>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        self.s_recv.poll_next_unpin(cx)
+    }
+}
+
+impl Sink<ControlMsg> for CtrlStream {
+    type Error = io::Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.s_send.poll_ready_unpin(cx)
     }
 
-    pub fn recv(&mut self) -> TryNext<CtrlRecvStream> {
-        self.s_recv.try_next()
+    fn start_send(mut self: Pin<&mut Self>, item: ControlMsg) -> Result<(), Self::Error> {
+        self.s_send.start_send_unpin(item)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.s_send.poll_flush_unpin(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
+        self.s_send.poll_close_unpin(cx)
     }
 }

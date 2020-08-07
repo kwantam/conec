@@ -1,22 +1,33 @@
 pub(crate) mod config;
 
-use super::consts::{ALPN_CONEC};
+use super::consts::ALPN_CONEC;
 use super::types::{ConecConnection, CtrlStream};
 use config::ClientConfig;
 
-use quinn::{ClientConfigBuilder, Endpoint, Incoming};
+// use futures::channel::mpsc;
+use quinn::{ClientConfigBuilder, Endpoint};
 use std::io;
 
-struct ClientChan {
-    conn: ConecConnection,
-    ctrl: CtrlStream,
-    peer: Option<String>,
+/*
+enum ClientEvent {
+    Error(io::Error),
+}
+*/
+
+pub(super) struct ClientChan {
+    pub(super) conn: ConecConnection,
+    pub(super) ctrl: CtrlStream,
+    pub(super) peer: Option<String>,
 }
 
 pub struct Client {
     endpoint: Endpoint,
-    incoming: Incoming,
+    // incoming: Incoming,
     coord: ClientChan,
+    /*
+    sender: mpsc::UnboundedSender<ClientEvent>,
+    events: mpsc::UnboundedReceiver<ClientEvent>,
+    */
 }
 
 impl Client {
@@ -36,7 +47,7 @@ impl Client {
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(qcc.build());
-        let (mut endpoint, incoming) = endpoint
+        let (mut endpoint, _incoming) = endpoint
             .bind(&config.srcaddr)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
@@ -58,10 +69,13 @@ impl Client {
             )
         })?;
 
+        // let (sender, events) = mpsc::unbounded();
         Ok(Self {
             endpoint,
-            incoming,
+            // incoming,
             coord: ClientChan { conn, ctrl, peer },
+            // sender,
+            // events,
         })
     }
 }

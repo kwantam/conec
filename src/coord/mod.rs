@@ -3,7 +3,7 @@ pub(crate) mod config;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{ConecConnection, ControlMsg, CtrlStream};
-use chan::{CoordChan, CoordChanRef};
+use chan::{CoordChan, CoordChanDriver, CoordChanRef};
 use config::CoordConfig;
 
 use futures::channel::mpsc;
@@ -13,18 +13,19 @@ use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task;
+use std::task::{Context, Poll, Waker};
 
-pub(crate) enum CoordEvent {
+enum CoordEvent {
     Accepted(ConecConnection, CtrlStream, String),
     Error(io::Error),
+    ChanClose(String),
 }
 
-pub(crate) struct CoordInner {
+struct CoordInner {
     endpoint: Endpoint,
     incoming: Incoming,
     clients: HashMap<String, CoordChan>,
-    driver: Option<task::Waker>,
+    driver: Option<Waker>,
     ref_count: usize,
     sender: mpsc::UnboundedSender<CoordEvent>,
     events: mpsc::UnboundedReceiver<CoordEvent>,
@@ -32,11 +33,9 @@ pub(crate) struct CoordInner {
 
 impl CoordInner {
     /// try to accept a new connection from a client
-    fn drive_accept(&mut self, cx: &mut task::Context) -> io::Result<bool> {
+    fn drive_accept(&mut self, cx: &mut Context) -> io::Result<bool> {
         let mut accepted = 0;
-        //let mut incoming_p = Pin::new(&mut *self.incoming);
         loop {
-            use task::Poll;
             match self.incoming.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => {
@@ -84,8 +83,7 @@ impl CoordInner {
     }
 
     /// handle events arriving on receiver
-    fn handle_events(&mut self, cx: &mut task::Context) {
-        use task::Poll;
+    fn handle_events(&mut self, cx: &mut Context) {
         use CoordEvent::*;
         loop {
             match self.events.poll_next_unpin(cx) {
@@ -95,7 +93,6 @@ impl CoordInner {
                         println!("err: {}", e);
                     }
                     Accepted(conn, mut ctrl, peer) => {
-                        // Note: unwrapping get_peer() is OK --- peer is a client, not a Coord
                         if self.clients.get(&peer[..]).is_some() {
                             tokio::spawn(async move {
                                 println!("error: name '{}' already in use", peer);
@@ -108,9 +105,17 @@ impl CoordInner {
                         } else {
                             let inner =
                                 CoordChanRef::new(conn, ctrl, peer.clone(), self.sender.clone());
-                            // XXX start driver here
+
+                            // spawn channel driver
+                            let driver = CoordChanDriver(inner.clone());
+                            tokio::spawn(async move { driver.await });
+
                             self.clients.insert(peer, CoordChan { inner });
                         }
+                    }
+                    ChanClose(client) => {
+                        // client channel closed --- drop it from the queue
+                        self.clients.remove(&client);
                     }
                 },
                 Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
@@ -121,10 +126,10 @@ impl CoordInner {
 }
 
 // a shared reference to a Coordinator
-pub(crate) struct CoordRef(Arc<Mutex<CoordInner>>);
+struct CoordRef(Arc<Mutex<CoordInner>>);
 
 impl CoordRef {
-    pub(crate) fn new(endpoint: Endpoint, incoming: Incoming) -> Self {
+    fn new(endpoint: Endpoint, incoming: Incoming) -> Self {
         let (sender, events) = mpsc::unbounded();
         Self(Arc::new(Mutex::new(CoordInner {
             endpoint,
@@ -204,13 +209,13 @@ impl Coord {
     }
 }
 
-#[must_use = "coord driver must be spawned!"]
-pub(crate) struct CoordDriver(CoordRef);
+#[must_use = "CoordDriver must be spawned!"]
+struct CoordDriver(CoordRef);
 
 impl Future for CoordDriver {
     type Output = io::Result<()>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context) -> task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let inner = &mut *self.0.lock().unwrap();
         match &inner.driver {
             Some(w) if w.will_wake(cx.waker()) => (),
@@ -227,9 +232,9 @@ impl Future for CoordDriver {
             }
         }
         if inner.ref_count == 0 && inner.clients.is_empty() {
-            task::Poll::Ready(Ok(()))
+            Poll::Ready(Ok(()))
         } else {
-            task::Poll::Pending
+            Poll::Pending
         }
     }
 }

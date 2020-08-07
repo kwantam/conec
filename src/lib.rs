@@ -7,8 +7,8 @@ pub mod coord;
 mod tests;
 pub mod types;
 
-pub use client::{Client, config::ClientConfig};
-pub use coord::{Coord, config::CoordConfig};
+pub use client::{config::ClientConfig, Client};
+pub use coord::{config::CoordConfig, Coord};
 
 mod consts {
     pub(crate) const DFLT_PORT: u16 = 1719;

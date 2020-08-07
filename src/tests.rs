@@ -31,24 +31,20 @@ fn test_simple() {
         client_cfg.set_ca(cert);
         let client = Client::new(client_cfg.clone()).await.unwrap();
 
-        time::delay_for(Duration::from_millis(20)).await;
-        println!("clients connected: {}", coord.num_clients());
-        time::delay_for(Duration::from_millis(20)).await;
-        println!("clients connected: {}", coord.num_clients());
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 1);
         drop(client);
         time::delay_for(Duration::from_millis(20)).await;
-        println!("clients connected: {}", coord.num_clients());
+        assert_eq!(coord.num_clients(), 0);
 
         // should generate a failure (eventually)
         let client = Client::new(client_cfg).await.unwrap();
 
-        time::delay_for(Duration::from_millis(20)).await;
-        println!("clients connected: {}", coord.num_clients());
-        time::delay_for(Duration::from_millis(20)).await;
-        println!("clients connected: {}", coord.num_clients());
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 1);
         drop(client);
         time::delay_for(Duration::from_millis(20)).await;
-        println!("clients connected: {}", coord.num_clients());
+        assert_eq!(coord.num_clients(), 0);
     });
 }
 
@@ -77,9 +73,5 @@ fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {
         Ok(cert) => cert,
         _ => panic!("could not stat file {:?}", cert_path),
     };
-    (
-        Certificate::from_der(&cert).unwrap(),
-        cert_path.to_path_buf(),
-        key_path.to_path_buf(),
-    )
+    (Certificate::from_der(&cert).unwrap(), cert_path, key_path)
 }
