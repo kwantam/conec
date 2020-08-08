@@ -1,18 +1,29 @@
 pub(crate) mod config;
 
 use super::consts::ALPN_CONEC;
-use super::types::{ConecConn, CtrlStream};
+use super::types::{ConecConn, ConecConnError, CtrlStream};
 use config::ClientConfig;
 
-// use futures::channel::mpsc;
-use quinn::{ClientConfigBuilder, Endpoint};
-use std::io;
+use err_derive::Error;
+use quinn::{ClientConfigBuilder, Endpoint, EndpointError};
 
 /*
 enum ClientEvent {
     Error(io::Error),
 }
 */
+
+#[derive(Debug,Error)]
+pub enum ClientError {
+    #[error(display = "Adding certificate authority: {:?}", _0)]
+    CertificateAuthority(#[source] webpki::Error),
+    #[error(display = "Binding port: {:?}", _0)]
+    Bind(#[source] EndpointError),
+    #[error(display = "Connecting to coordinator: {:?}", _0)]
+    Connect(#[source] ConecConnError),
+    #[error(display = "Accepting control stream from coordinator: {:?}", _0)]
+    AcceptCtrl(#[error(source, no_from)] ConecConnError),
+}
 
 pub(super) struct ClientChan {
     pub(super) conn: ConecConn,
@@ -31,7 +42,7 @@ pub struct Client {
 
 impl Client {
     /// Construct a new Client
-    pub async fn new(config: ClientConfig) -> io::Result<Self> {
+    pub async fn new(config: ClientConfig) -> Result<Self, ClientError> {
         // build the client configuration
         let mut qcc = ClientConfigBuilder::default();
         qcc.protocols(ALPN_CONEC);
@@ -39,34 +50,19 @@ impl Client {
             qcc.enable_keylog();
         }
         if let Some(ca) = config.extra_ca {
-            qcc.add_certificate_authority(ca)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            qcc.add_certificate_authority(ca)?;
         }
 
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(qcc.build());
-        let (mut endpoint, _incoming) = endpoint
-            .bind(&config.srcaddr)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
-        let mut conn = ConecConn::connect(&mut endpoint, &config.coord[..], config.port)
-            .await
-            .map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("failed to set up coord connection: {}", e),
-                )
-            })?;
+        let mut conn = ConecConn::connect(&mut endpoint, &config.coord[..], config.port).await?;
 
         // set up the control stream with the coordinator
-        let ctrl = conn.accept_ctrl(config.id).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("failed to open coord control stream: {}", e),
-            )
-        })?;
+        let ctrl = conn.accept_ctrl(config.id).await.map_err(|e| ClientError::AcceptCtrl(e))?;
 
         // let (sender, events) = mpsc::unbounded();
         Ok(Self {
