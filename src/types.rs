@@ -1,8 +1,9 @@
 use super::consts::VERSION;
 
+use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    CertificateChain, Connection, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection,
+    CertificateChain, Connection, ConnectionError, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection,
     RecvStream, SendStream,
 };
 use rand::{thread_rng, Rng};
@@ -20,6 +21,54 @@ pub struct ConecConn {
     connection: Connection,
     iu_streams: IncomingUniStreams,
     ib_streams: IncomingBiStreams,
+}
+
+#[derive(Debug,Error)]
+pub enum ConecConnError {
+    #[error(display = "Local connection error: {:?}", _0)]
+    ConnectLocal(#[error(source,no_from)] ConnectionError),
+    #[error(display = "Connection or name resolution failed")]
+    ConnectOrResolution,
+    #[error(display = "Unexpected end of BiDi stream")]
+    EndOfBidiStream,
+    #[error(display = "Accepting BiDi stream: {:?}", _0)]
+    AcceptBidiStream(#[error(source,no_from)] ConnectionError),
+    #[error(display = "No certificate chain available")]
+    CertificateChain,
+    #[error(display = "send_hello error: {:?}", _0)]
+    SendHello(#[error(source,no_from)] CtrlStreamError),
+    #[error(display = "Opening BiDi stream: {:?}", _0)]
+    OpenBidiStream(#[error(source,no_from)] ConnectionError),
+    #[error(display = "Sending nonce: {:?}", _0)]
+    NonceSend(#[error(source,no_from)] CtrlStreamError),
+    #[error(display = "Receiving hello: {:?}", _0)]
+    RecvHello(#[error(source,no_from)] CtrlStreamError),
+}
+
+#[derive(Debug,Error)]
+pub enum CtrlStreamError {
+    #[error(display = "Recv CoNonce: {:?}", _0)]
+    NonceRecv(#[error(source,no_from)] io::Error),
+    #[error(display = "Wrong message: got {:?}, expected {:?}", _0, _1)]
+    WrongMessage(ControlMsg, ControlMsg),
+    #[error(display = "Version mismatch: got {:?}, expected {:?}", _0, VERSION)]
+    VersionMismatch(String),
+    #[error(display = "Recv ClHello: {:?}", _0)]
+    RecvClHello(#[error(source,no_from)] io::Error),
+    #[error(display = "Send ClHello: {:?}", _0)]
+    SendClHello(#[error(source,no_from)] io::Error),
+    #[error(display = "Recv CoHello: {:?}", _0)]
+    RecvCoHello(#[error(source,no_from)] io::Error),
+    #[error(display = "Send CoHello: {:?}", _0)]
+    SendCoHello(#[error(source,no_from)] io::Error),
+    #[error(display = "HelloError from peer: {:?}", _0)]
+    PeerHelloError(String),
+    #[error(display = "Send CoNonce: {:?}", _0)]
+    NonceSend(#[error(source,no_from)] io::Error),
+    #[error(display = "Nonce mismatch")]
+    NonceMismatch,
+    #[error(display = "finish() failed")]
+    FinishError,
 }
 
 impl ConecConn {
