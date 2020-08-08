@@ -1,6 +1,6 @@
 [package]
 name = "conec"
-version = "0.0.1"
+version = "0.0.2" # don't forget to change VERSION string in lib.rs
 authors = ["kwantam <kwantam@gmail.com>"]
 edition = "2018"
 description = "COordinated NEtwork Channels"
