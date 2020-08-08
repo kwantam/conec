@@ -78,7 +78,7 @@ channel a separate QUIC connection directly to the other endpoint.
 - basic functionality
     - [x] per-channel driver @ Coord
     - [ ] Client driver - what is the API for this? one driver for whole client?
-    - [ ] Client connection: switch handshake order, detect dup-id earlier
+    - [x] Client connection: switch handshake order, detect dup-id earlier
     - [ ] proxied streams through coordinator - ProxStream driver
 - future features
     - [ ] direct Client-to-Client channels

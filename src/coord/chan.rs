@@ -1,9 +1,10 @@
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConnection, CtrlStream};
+use crate::types::{ConecConnection, ControlMsg, CtrlStream};
 
 use futures::channel::mpsc;
 use futures::prelude::*;
+use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -17,10 +18,12 @@ pub(super) struct CoordChanInner {
     ref_count: usize,
     driver: Option<Waker>,
     driver_lost: bool,
+    to_send: VecDeque<ControlMsg>,
+    flushing: bool,
 }
 
 impl CoordChanInner {
-    /// read the next message from the recv channel
+    // read the next message from the recv channel
     fn drive_recv(&mut self, cx: &mut Context) -> io::Result<bool> {
         let mut recvd = 0;
         loop {
@@ -47,6 +50,40 @@ impl CoordChanInner {
             }
         }
         Ok(false)
+    }
+
+    // send something on the send channel
+    fn drive_send(&mut self, cx: &mut Context) -> io::Result<bool> {
+        let mut sent = 0;
+        let mut cont = false;
+        loop {
+            if self.to_send.is_empty() {
+                break;
+            }
+            match self.ctrl.poll_ready_unpin(cx) {
+                Poll::Pending => break,
+                Poll::Ready(Err(e)) => return Err(e),
+                Poll::Ready(Ok(())) => (),
+            }
+            self.ctrl
+                // unwrap is safe: checked len above
+                .start_send_unpin(self.to_send.pop_front().unwrap())?;
+            sent += 1;
+            if sent >= MAX_LOOPS {
+                cont = !self.to_send.is_empty();
+                break;
+            }
+        }
+        match self.ctrl.poll_flush_unpin(cx) {
+            Poll::Pending => {
+                self.flushing = true;
+            }
+            Poll::Ready(Ok(())) => {
+                self.flushing = false;
+            }
+            Poll::Ready(Err(e)) => return Err(e),
+        }
+        Ok(cont)
     }
 }
 
@@ -88,6 +125,9 @@ impl CoordChanRef {
         peer: String,
         coord: mpsc::UnboundedSender<CoordEvent>,
     ) -> Self {
+        let mut to_send = VecDeque::new();
+        // send hello at startup
+        to_send.push_back(ControlMsg::CoHello);
         Self(Arc::new(Mutex::new(CoordChanInner {
             conn,
             ctrl,
@@ -96,6 +136,8 @@ impl CoordChanRef {
             ref_count: 0,
             driver: None,
             driver_lost: false,
+            to_send,
+            flushing: false,
         })))
     }
 }
@@ -121,9 +163,11 @@ impl Future for CoordChanDriver {
         loop {
             let mut keep_going = false;
             keep_going |= inner.drive_recv(cx)?;
+            if !inner.to_send.is_empty() || inner.flushing {
+                keep_going |= inner.drive_send(cx)?;
+            }
             /*
             inner.handle_events();
-            keep_going |= inner.drive_send()?;
             */
             if !keep_going {
                 break;

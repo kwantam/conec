@@ -17,7 +17,6 @@ enum ClientEvent {
 pub(super) struct ClientChan {
     pub(super) conn: ConecConnection,
     pub(super) ctrl: CtrlStream,
-    pub(super) peer: Option<String>,
 }
 
 pub struct Client {
@@ -62,7 +61,7 @@ impl Client {
             })?;
 
         // set up the control stream with the coordinator
-        let (ctrl, peer) = conn.connect_ctrl(config.id).await.map_err(|e| {
+        let ctrl = conn.accept_ctrl(config.id).await.map_err(|e| {
             io::Error::new(
                 io::ErrorKind::Other,
                 format!("failed to open coord control stream: {}", e),
@@ -73,7 +72,7 @@ impl Client {
         Ok(Self {
             endpoint,
             // incoming,
-            coord: ClientChan { conn, ctrl, peer },
+            coord: ClientChan { conn, ctrl },
             // sender,
             // events,
         })

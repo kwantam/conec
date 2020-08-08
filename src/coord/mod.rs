@@ -8,7 +8,7 @@ use config::CoordConfig;
 
 use futures::channel::mpsc;
 use futures::prelude::*;
-use quinn::{Endpoint, Incoming, ServerConfigBuilder};
+use quinn::{CertificateChain, Endpoint, Incoming, ServerConfigBuilder};
 use std::collections::HashMap;
 use std::io;
 use std::pin::Pin;
@@ -17,13 +17,14 @@ use std::task::{Context, Poll, Waker};
 
 enum CoordEvent {
     Accepted(ConecConnection, CtrlStream, String),
-    Error(io::Error),
+    AcceptError(io::Error),
     ChanClose(String),
 }
 
 struct CoordInner {
     endpoint: Endpoint,
     incoming: Incoming,
+    certs: CertificateChain,
     clients: HashMap<String, CoordChan>,
     driver: Option<Waker>,
     ref_count: usize,
@@ -46,24 +47,25 @@ impl CoordInner {
                 }
                 Poll::Ready(Some(incoming)) => {
                     let sender = self.sender.clone();
+                    let certs = self.certs.clone();
                     tokio::spawn(async move {
                         let mut conn = match incoming.await.map_err(|e| {
                             io::Error::new(io::ErrorKind::Other, format!("accept failed: {}", e))
                         }) {
                             Err(e) => {
-                                sender.unbounded_send(CoordEvent::Error(e)).unwrap();
+                                sender.unbounded_send(CoordEvent::AcceptError(e)).unwrap();
                                 return;
                             }
                             Ok(conn) => ConecConnection::new(conn),
                         };
-                        let (ctrl, peer) = match conn.accept_ctrl(None).await.map_err(|e| {
+                        let (ctrl, peer) = match conn.connect_ctrl(certs).await.map_err(|e| {
                             io::Error::new(
                                 io::ErrorKind::Other,
                                 format!("failed to accept control stream: {}", e),
                             )
                         }) {
                             Err(e) => {
-                                sender.unbounded_send(CoordEvent::Error(e)).unwrap();
+                                sender.unbounded_send(CoordEvent::AcceptError(e)).unwrap();
                                 return;
                             }
                             Ok(ctrl_peer) => ctrl_peer,
@@ -82,13 +84,13 @@ impl CoordInner {
         Ok(false)
     }
 
-    /// handle events arriving on receiver
+    /// handle events arriving on self.events
     fn handle_events(&mut self, cx: &mut Context) {
         use CoordEvent::*;
         loop {
             match self.events.poll_next_unpin(cx) {
                 Poll::Ready(Some(event)) => match event {
-                    Error(e) => {
+                    AcceptError(e) => {
                         // XXX what do we do here?
                         println!("err: {}", e);
                     }
@@ -96,9 +98,10 @@ impl CoordInner {
                         if self.clients.get(&peer[..]).is_some() {
                             tokio::spawn(async move {
                                 println!("error: name '{}' already in use", peer);
-                                ctrl.send(ControlMsg::Error("name already in use".to_string()))
+                                ctrl.send(ControlMsg::HelloError("name in use".to_string()))
                                     .await
                                     .ok();
+                                ctrl.finish().await.ok();
                                 drop(ctrl);
                                 drop(conn);
                             });
@@ -129,11 +132,12 @@ impl CoordInner {
 struct CoordRef(Arc<Mutex<CoordInner>>);
 
 impl CoordRef {
-    fn new(endpoint: Endpoint, incoming: Incoming) -> Self {
+    fn new(endpoint: Endpoint, incoming: Incoming, certs: CertificateChain) -> Self {
         let (sender, events) = mpsc::unbounded();
         Self(Arc::new(Mutex::new(CoordInner {
             endpoint,
             incoming,
+            certs,
             clients: HashMap::new(),
             driver: None,
             ref_count: 0,
@@ -186,7 +190,7 @@ impl Coord {
         if config.keylog {
             qsc.enable_keylog();
         }
-        qsc.certificate(config.cert, config.key)
+        qsc.certificate(config.cert.clone(), config.key)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         // build QUIC endpoint
@@ -196,7 +200,7 @@ impl Coord {
             .bind(&config.laddr)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-        let inner = CoordRef::new(endpoint, incoming);
+        let inner = CoordRef::new(endpoint, incoming, config.cert);
         let driver = CoordDriver(inner.clone());
         tokio::spawn(async move { driver.await });
 
