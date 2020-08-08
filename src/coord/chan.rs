@@ -2,6 +2,7 @@ use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
 use crate::types::{ConecConn, ControlMsg, CtrlStream};
 
+use err_derive::Error;
 use futures::channel::mpsc;
 use futures::prelude::*;
 use std::collections::VecDeque;
@@ -9,6 +10,20 @@ use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+
+#[derive(Debug, Error)]
+pub enum CoordChanError {
+    #[error(display = "Peer closed connection")]
+    PeerClosed,
+    #[error(display = "Stream poll: {:?}", _0)]
+    StreamPoll(#[error(source, no_from)] io::Error),
+    #[error(display = "Sink ready polling: {:?}", _0)]
+    SinkReady(#[error(source, no_from)] io::Error),
+    #[error(display = "Sink flush polling: {:?}", _0)]
+    SinkFlush(#[error(source, no_from)] io::Error),
+    #[error(display = "Sink start send: {:?}", _0)]
+    SinkSend(#[error(source, no_from)] io::Error),
+}
 
 pub(super) struct CoordChanInner {
     conn: ConecConn,
@@ -24,26 +39,14 @@ pub(super) struct CoordChanInner {
 
 impl CoordChanInner {
     // read the next message from the recv channel
-    fn drive_recv(&mut self, cx: &mut Context) -> io::Result<bool> {
+    fn drive_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut recvd = 0;
         loop {
             match self.ctrl.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => {
-                    // return error, which kills driver loop
-                    return Err(io::Error::new(
-                        io::ErrorKind::ConnectionReset,
-                        "peer closed",
-                    ));
-                }
-                Poll::Ready(Some(msg)) => {
-                    let msg = match msg {
-                        Err(e) => return Err(e),
-                        Ok(msg) => msg,
-                    };
-                    println!("{:?}", msg);
-                }
-            }
+                Poll::Ready(None) => Err(CoordChanError::PeerClosed),
+                Poll::Ready(Some(msg)) => msg.map_err(|e| CoordChanError::StreamPoll(e)),
+            }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {
                 return Ok(true);
@@ -53,7 +56,7 @@ impl CoordChanInner {
     }
 
     // send something on the send channel
-    fn drive_send(&mut self, cx: &mut Context) -> io::Result<bool> {
+    fn drive_send(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut sent = 0;
         let mut cont = false;
         loop {
@@ -62,12 +65,12 @@ impl CoordChanInner {
             }
             match self.ctrl.poll_ready_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(Err(e)) => return Err(e),
-                Poll::Ready(Ok(())) => (),
-            }
+                Poll::Ready(rdy) => rdy.map_err(|e| CoordChanError::SinkReady(e)),
+            }?;
             self.ctrl
                 // unwrap is safe: checked len above
-                .start_send_unpin(self.to_send.pop_front().unwrap())?;
+                .start_send_unpin(self.to_send.pop_front().unwrap())
+                .map_err(|e| CoordChanError::SinkSend(e))?;
             sent += 1;
             if sent >= MAX_LOOPS {
                 cont = !self.to_send.is_empty();
@@ -75,14 +78,10 @@ impl CoordChanInner {
             }
         }
         match self.ctrl.poll_flush_unpin(cx) {
-            Poll::Pending => {
-                self.flushing = true;
-            }
-            Poll::Ready(Ok(())) => {
-                self.flushing = false;
-            }
-            Poll::Ready(Err(e)) => return Err(e),
-        }
+            Poll::Pending => Ok(self.flushing = true),
+            Poll::Ready(Ok(())) => Ok(self.flushing = false),
+            Poll::Ready(Err(e)) => Err(CoordChanError::SinkFlush(e)),
+        }?;
         Ok(cont)
     }
 }
@@ -150,7 +149,7 @@ pub(super) struct CoordChan {
 pub(super) struct CoordChanDriver(pub(super) CoordChanRef);
 
 impl Future for CoordChanDriver {
-    type Output = io::Result<()>;
+    type Output = Result<(), CoordChanError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let inner = &mut *self.0.lock().unwrap();

@@ -2,22 +2,39 @@ mod chan;
 pub(crate) mod config;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
-use crate::types::{ConecConn, ControlMsg, CtrlStream};
+use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 use chan::{CoordChan, CoordChanDriver, CoordChanRef};
 use config::CoordConfig;
 
+use err_derive::Error;
 use futures::channel::mpsc;
 use futures::prelude::*;
-use quinn::{CertificateChain, Endpoint, Incoming, ServerConfigBuilder};
+use quinn::{
+    crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
+    ServerConfigBuilder,
+};
 use std::collections::HashMap;
-use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+#[derive(Debug, Error)]
+pub enum CoordError {
+    #[error(display = "Unexpected end of Incoming stream")]
+    EndOfIncomingStream,
+    #[error(display = "Connection error: {:?}", _0)]
+    Connect(#[source] ConnectionError),
+    #[error(display = "Error connecting control channel: {:?}", _0)]
+    Control(#[source] ConecConnError),
+    #[error(display = "Certificate: {:?}", _0)]
+    Certificate(#[source] TLSError),
+    #[error(display = "Binding port: {:?}", _0)]
+    Bind(#[source] EndpointError),
+}
+
 enum CoordEvent {
     Accepted(ConecConn, CtrlStream, String),
-    AcceptError(io::Error),
+    AcceptError(CoordError),
     ChanClose(String),
 }
 
@@ -34,48 +51,37 @@ struct CoordInner {
 
 impl CoordInner {
     /// try to accept a new connection from a client
-    fn drive_accept(&mut self, cx: &mut Context) -> io::Result<bool> {
+    fn drive_accept(&mut self, cx: &mut Context) -> Result<bool, CoordError> {
         let mut accepted = 0;
         loop {
             match self.incoming.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "accept failed: unexpected end of Incoming stream",
-                    ));
-                }
+                Poll::Ready(None) => Err(CoordError::EndOfIncomingStream),
                 Poll::Ready(Some(incoming)) => {
                     let sender = self.sender.clone();
                     let certs = self.certs.clone();
                     tokio::spawn(async move {
-                        let mut conn = match incoming.await.map_err(|e| {
-                            io::Error::new(io::ErrorKind::Other, format!("accept failed: {}", e))
-                        }) {
+                        use CoordError::*;
+                        use CoordEvent::*;
+                        let mut conn = match incoming.await {
                             Err(e) => {
-                                sender.unbounded_send(CoordEvent::AcceptError(e)).unwrap();
+                                sender.unbounded_send(AcceptError(Connect(e))).unwrap();
                                 return;
                             }
                             Ok(conn) => ConecConn::new(conn),
                         };
-                        let (ctrl, peer) = match conn.connect_ctrl(certs).await.map_err(|e| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                format!("failed to accept control stream: {}", e),
-                            )
-                        }) {
+                        let (ctrl, peer) = match conn.connect_ctrl(certs).await {
                             Err(e) => {
-                                sender.unbounded_send(CoordEvent::AcceptError(e)).unwrap();
+                                sender.unbounded_send(AcceptError(Control(e))).unwrap();
                                 return;
                             }
                             Ok(ctrl_peer) => ctrl_peer,
                         };
-                        sender
-                            .unbounded_send(CoordEvent::Accepted(conn, ctrl, peer))
-                            .unwrap();
+                        sender.unbounded_send(Accepted(conn, ctrl, peer)).unwrap();
                     });
+                    Ok(())
                 }
-            }
+            }?;
             accepted += 1;
             if accepted >= MAX_LOOPS {
                 return Ok(true);
@@ -182,7 +188,7 @@ pub struct Coord {
 
 impl Coord {
     /// construct a new coord
-    pub async fn new(config: CoordConfig) -> io::Result<Self> {
+    pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
         // build configuration
         let mut qsc = ServerConfigBuilder::default();
         qsc.protocols(ALPN_CONEC);
@@ -190,15 +196,12 @@ impl Coord {
         if config.keylog {
             qsc.enable_keylog();
         }
-        qsc.certificate(config.cert.clone(), config.key)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        qsc.certificate(config.cert.clone(), config.key)?;
 
         // build QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.listen(qsc.build());
-        let (endpoint, incoming) = endpoint
-            .bind(&config.laddr)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
         let inner = CoordRef::new(endpoint, incoming, config.cert);
         let driver = CoordDriver(inner.clone());
@@ -217,7 +220,7 @@ impl Coord {
 struct CoordDriver(CoordRef);
 
 impl Future for CoordDriver {
-    type Output = io::Result<()>;
+    type Output = Result<(), CoordError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let inner = &mut *self.0.lock().unwrap();
