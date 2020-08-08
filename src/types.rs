@@ -3,8 +3,8 @@ use super::consts::VERSION;
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    CertificateChain, Connection, ConnectionError, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection,
-    RecvStream, SendStream,
+    CertificateChain, ConnectError, Connection, ConnectionError, Endpoint, IncomingBiStreams,
+    IncomingUniStreams, NewConnection, RecvStream, SendStream, WriteError,
 };
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -23,75 +23,86 @@ pub struct ConecConn {
     ib_streams: IncomingBiStreams,
 }
 
-#[derive(Debug,Error)]
+#[derive(Debug, Error)]
 pub enum ConecConnError {
+    #[error(display = "Local socket error: {:?}", _0)]
+    SocketLocal(#[error(source)] io::Error),
     #[error(display = "Local connection error: {:?}", _0)]
-    ConnectLocal(#[error(source,no_from)] ConnectionError),
-    #[error(display = "Connection or name resolution failed")]
-    ConnectOrResolution,
+    ConnectLocal(#[error(source)] ConnectError),
+    #[error(display = "Could not connect to coordinator")]
+    CouldNotConnect,
+    #[error(display = "Could not resolve coordinator hostname")]
+    NameResolution,
     #[error(display = "Unexpected end of BiDi stream")]
     EndOfBidiStream,
     #[error(display = "Accepting BiDi stream: {:?}", _0)]
-    AcceptBidiStream(#[error(source,no_from)] ConnectionError),
+    AcceptBidiStream(#[error(source, no_from)] ConnectionError),
     #[error(display = "No certificate chain available")]
     CertificateChain,
     #[error(display = "send_hello error: {:?}", _0)]
-    SendHello(#[error(source,no_from)] CtrlStreamError),
+    SendHello(#[error(source, no_from)] CtrlStreamError),
     #[error(display = "Opening BiDi stream: {:?}", _0)]
-    OpenBidiStream(#[error(source,no_from)] ConnectionError),
+    OpenBidiStream(#[error(source, no_from)] ConnectionError),
     #[error(display = "Sending nonce: {:?}", _0)]
-    NonceSend(#[error(source,no_from)] CtrlStreamError),
+    NonceSend(#[error(source, no_from)] CtrlStreamError),
     #[error(display = "Receiving hello: {:?}", _0)]
-    RecvHello(#[error(source,no_from)] CtrlStreamError),
+    RecvHello(#[error(source, no_from)] CtrlStreamError),
 }
 
-#[derive(Debug,Error)]
+#[derive(Debug, Error)]
 pub enum CtrlStreamError {
     #[error(display = "Recv CoNonce: {:?}", _0)]
-    NonceRecv(#[error(source,no_from)] io::Error),
+    NonceRecv(#[error(source, no_from)] io::Error),
+    #[error(display = "Unexpected end of control stream")]
+    EndOfCtrlStream,
     #[error(display = "Wrong message: got {:?}, expected {:?}", _0, _1)]
     WrongMessage(ControlMsg, ControlMsg),
     #[error(display = "Version mismatch: got {:?}, expected {:?}", _0, VERSION)]
     VersionMismatch(String),
     #[error(display = "Recv ClHello: {:?}", _0)]
-    RecvClHello(#[error(source,no_from)] io::Error),
+    RecvClHello(#[error(source, no_from)] io::Error),
     #[error(display = "Send ClHello: {:?}", _0)]
-    SendClHello(#[error(source,no_from)] io::Error),
+    SendClHello(#[error(source, no_from)] io::Error),
     #[error(display = "Recv CoHello: {:?}", _0)]
-    RecvCoHello(#[error(source,no_from)] io::Error),
+    RecvCoHello(#[error(source, no_from)] io::Error),
     #[error(display = "Send CoHello: {:?}", _0)]
-    SendCoHello(#[error(source,no_from)] io::Error),
+    SendCoHello(#[error(source, no_from)] io::Error),
     #[error(display = "HelloError from peer: {:?}", _0)]
     PeerHelloError(String),
     #[error(display = "Send CoNonce: {:?}", _0)]
-    NonceSend(#[error(source,no_from)] io::Error),
-    #[error(display = "Nonce mismatch")]
-    NonceMismatch,
-    #[error(display = "finish() failed")]
-    FinishError,
+    NonceSend(#[error(source, no_from)] io::Error),
+    #[error(display = "Bad client auth message")]
+    BadClientAuth,
+    #[error(display = "flush() failed: {:?}", _0)]
+    FlushError(#[error(source, no_from)] io::Error),
+    #[error(display = "finish() failed: {:?}", _0)]
+    FinishError(#[error(source, no_from)] WriteError),
 }
 
 impl ConecConn {
-    pub async fn connect(endpoint: &mut Endpoint, caddr: &str, cport: u16) -> io::Result<Self> {
+    pub async fn connect(
+        endpoint: &mut Endpoint,
+        caddr: &str,
+        cport: u16,
+    ) -> Result<Self, ConecConnError> {
         // only attempt to connect to an address of the same type as the endpoint's local socket
         let use_ipv4 = endpoint.local_addr()?.is_ipv4();
+        let mut resolved = false;
         for coord_addr in (caddr, cport)
             .to_socket_addrs()?
             .filter(|x| use_ipv4 == x.is_ipv4())
         {
-            match endpoint
-                .connect(&coord_addr, caddr)
-                .map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?
-                .await
-            {
+            resolved = true;
+            match endpoint.connect(&coord_addr, caddr)?.await {
                 Err(_) => continue,
                 Ok(c) => return Ok(Self::new(c)),
             }
         }
-        Err(io::Error::new(
-            io::ErrorKind::ConnectionAborted,
-            "could not connect to coordinator",
-        ))
+        if resolved {
+            Err(ConecConnError::CouldNotConnect)
+        } else {
+            Err(ConecConnError::NameResolution)
+        }
     }
 
     pub fn new(nc: NewConnection) -> Self {
@@ -108,49 +119,38 @@ impl ConecConn {
         }
     }
 
-    pub async fn accept_ctrl(&mut self, id: String) -> io::Result<CtrlStream> {
+    pub async fn accept_ctrl(&mut self, id: String) -> Result<CtrlStream, ConecConnError> {
         let (cc_send, cc_recv) = self
             .ib_streams
             .next()
             .await
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "accept_ctrl failed: unexpected end of stream",
-                )
-            })?
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("accept_ctrl failed: {}", e))
-            })?;
+            .ok_or(ConecConnError::EndOfBidiStream)?
+            .map_err(|e| ConecConnError::AcceptBidiStream(e))?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         let certs = self
             .connection
             .authentication_data()
             .peer_certificates
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    "accept_ctrl failed: no certificate chain available",
-                )
-            })?;
-        ctrl_stream.send_hello(id, certs).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("connect_ctrl error sending hello: {}", e),
-            )
-        })?;
+            .ok_or(ConecConnError::CertificateChain)?;
+        // FIXME fix error type here
+        ctrl_stream
+            .send_hello(id, certs)
+            .await
+            .map_err(|e| ConecConnError::SendHello(e))?;
         Ok(ctrl_stream)
     }
 
     pub async fn connect_ctrl(
         &mut self,
         certs: CertificateChain,
-    ) -> io::Result<(CtrlStream, String)> {
+    ) -> Result<(CtrlStream, String), ConecConnError> {
         // open a new control stream to newly connected client
-        let (cc_send, cc_recv) = self.connection.open_bi().await.map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("connect_ctrl failed: {}", e))
-        })?;
+        let (cc_send, cc_recv) = self
+            .connection
+            .open_bi()
+            .await
+            .map_err(|e| ConecConnError::OpenBidiStream(e))?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         // compute a nonce and send it to the client
@@ -163,7 +163,7 @@ impl ConecConn {
             // time
             tmp += &SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("clock error")
+                .expect("fatal clock error (should never happen)")
                 .as_nanos()
                 .to_string();
             tmp += "::";
@@ -171,20 +171,16 @@ impl ConecConn {
             tmp += &thread_rng().gen::<u128>().to_string();
             tmp
         };
-        ctrl_stream.send_nonce(nonce.clone()).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("accept_ctrl error sending nonce: {}", e),
-            )
-        })?;
+        ctrl_stream
+            .send_nonce(nonce.clone())
+            .await
+            .map_err(|e| ConecConnError::NonceSend(e))?;
 
         // expect the client's hello back
-        let peer = ctrl_stream.recv_hello(&nonce, certs).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("accept_ctrl error getting hello: {}", e),
-            )
-        })?;
+        let peer = ctrl_stream
+            .recv_hello(&nonce, certs)
+            .await
+            .map_err(|e| ConecConnError::RecvHello(e))?;
         Ok((ctrl_stream, peer))
     }
 }
@@ -290,113 +286,87 @@ impl CtrlStream {
         }
     }
 
-    pub async fn send_hello(&mut self, id: String, certs: CertificateChain) -> io::Result<()> {
+    pub async fn send_hello(
+        &mut self,
+        id: String,
+        certs: CertificateChain,
+    ) -> Result<(), CtrlStreamError> {
         use ControlMsg::*;
+        use CtrlStreamError::*;
 
         // first, get the nonce from the server
-        let nonce = match self.try_next().await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("send_hello: could not recv CoNonce: {}", e),
-            )
-        })? {
+        let nonce = match self.try_next().await.map_err(|e| NonceRecv(e))? {
             Some(CoNonce(n)) => Ok(n),
-            _ => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "send_hello: expected nonce, got something else",
-            )),
+            Some(msg) => Err(WrongMessage(msg, CoNonce("".to_string()))),
+            None => Err(EndOfCtrlStream),
         }?;
         // check that version info in nonce matches our version
         if &nonce[..VERSION.len()] != VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "send_hello: version mismatch",
-            ));
+            return Err(VersionMismatch((&nonce[..VERSION.len()]).to_string()));
         }
         // append certificate to nonce
         // XXX here we should be signing under our client key and sending back
         let new_nonce = format!("{}::{:?}", nonce, certs);
 
         // next, send back the hello
-        self.send(ClHello(id, new_nonce)).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("send_hello: could not send ClHello: {}", e),
-            )
-        })?;
+        self.send(ClHello(id, new_nonce))
+            .await
+            .map_err(|e| SendClHello(e))?;
 
         // finally, get CoHello (or maybe an Error)
-        match self.try_next().await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("send_hello: could not recv CoHello: {}", e),
-            )
-        })? {
+        match self.try_next().await.map_err(|e| RecvCoHello(e))? {
             Some(CoHello) => Ok(()),
-            Some(HelloError(e)) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("send_hello: HelloError from peer: {}", e),
-            )),
-            _ => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "send_hello: got unexpected message from peer",
-            )),
+            Some(HelloError(e)) => Err(PeerHelloError(e)),
+            Some(msg) => Err(WrongMessage(msg, CoHello)),
+            None => Err(EndOfCtrlStream),
         }
     }
 
-    pub async fn send_nonce(&mut self, nonce: String) -> io::Result<()> {
-        self.send(ControlMsg::CoNonce(nonce)).await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("send_nonce: could not send: {}", e),
-            )
-        })
+    pub async fn send_nonce(&mut self, nonce: String) -> Result<(), CtrlStreamError> {
+        self.send(ControlMsg::CoNonce(nonce))
+            .await
+            .map_err(|e| CtrlStreamError::NonceSend(e))
     }
 
-    pub async fn recv_hello(&mut self, nonce: &str, certs: CertificateChain) -> io::Result<String> {
-        let (pid, sig) = match self.try_next().await.map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("recv_hello: could not recv: {}", e),
-            )
-        })? {
-            Some(ControlMsg::ClHello(pid, sig)) => (pid, sig),
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "recv_hello: expected hello, got something else",
-                ));
-            }
-        };
+    pub async fn recv_hello(
+        &mut self,
+        nonce: &str,
+        certs: CertificateChain,
+    ) -> Result<String, CtrlStreamError> {
+        use ControlMsg::*;
+        use CtrlStreamError::*;
+
+        let (pid, sig) = match self.try_next().await.map_err(|e| RecvClHello(e))? {
+            Some(ClHello(pid, sig)) => Ok((pid, sig)),
+            Some(msg) => Err(WrongMessage(msg, ClHello("".to_string(), "".to_string()))),
+            None => Err(EndOfCtrlStream),
+        }?;
 
         // for channel binding, append expected server cert chain to nonce
         // XXX here we should be checking a signature and maybe a certificate
         let nonce_expect = format!("{}::{:?}", nonce, certs);
         if sig != nonce_expect {
-            self.send(ControlMsg::HelloError("nonce mismatch".to_string()))
+            self.send(HelloError("nonce mismatch".to_string()))
                 .await
                 .ok();
             self.finish().await.ok();
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "recv_hello: nonce mismatch",
-            ))
+            Err(BadClientAuth)
         } else {
             Ok(pid)
         }
     }
 
-    pub async fn finish(&mut self) -> io::Result<()> {
+    pub async fn finish(&mut self) -> Result<(), CtrlStreamError> {
         self.s_send
             .flush()
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| CtrlStreamError::FlushError(e))?;
         self.s_send
             .get_mut()
             .get_mut()
             .finish()
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(|e| CtrlStreamError::FinishError(e))
     }
 }
 
