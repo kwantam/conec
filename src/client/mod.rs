@@ -1,7 +1,7 @@
 pub(crate) mod config;
 
 use super::consts::ALPN_CONEC;
-use super::types::{ConecConnection, CtrlStream};
+use super::types::{ConecConn, CtrlStream};
 use config::ClientConfig;
 
 // use futures::channel::mpsc;
@@ -15,7 +15,7 @@ enum ClientEvent {
 */
 
 pub(super) struct ClientChan {
-    pub(super) conn: ConecConnection,
+    pub(super) conn: ConecConn,
     pub(super) ctrl: CtrlStream,
 }
 
@@ -51,7 +51,7 @@ impl Client {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         // set up the network endpoint and connect to the coordinator
-        let mut conn = ConecConnection::connect(&mut endpoint, &config.coord[..], config.port)
+        let mut conn = ConecConn::connect(&mut endpoint, &config.coord[..], config.port)
             .await
             .map_err(|e| {
                 io::Error::new(

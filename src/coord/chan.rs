@@ -1,6 +1,6 @@
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConnection, ControlMsg, CtrlStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream};
 
 use futures::channel::mpsc;
 use futures::prelude::*;
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 pub(super) struct CoordChanInner {
-    conn: ConecConnection,
+    conn: ConecConn,
     ctrl: CtrlStream,
     peer: String,
     coord: mpsc::UnboundedSender<CoordEvent>,
@@ -120,7 +120,7 @@ impl Drop for CoordChanRef {
 
 impl CoordChanRef {
     pub(super) fn new(
-        conn: ConecConnection,
+        conn: ConecConn,
         ctrl: CtrlStream,
         peer: String,
         coord: mpsc::UnboundedSender<CoordEvent>,

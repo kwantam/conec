@@ -16,13 +16,13 @@ use tokio_serde::formats::SymmetricalBincode;
 use tokio_serde::SymmetricallyFramed;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-pub struct ConecConnection {
+pub struct ConecConn {
     connection: Connection,
     iu_streams: IncomingUniStreams,
     ib_streams: IncomingBiStreams,
 }
 
-impl ConecConnection {
+impl ConecConn {
     pub async fn connect(endpoint: &mut Endpoint, caddr: &str, cport: u16) -> io::Result<Self> {
         // only attempt to connect to an address of the same type as the endpoint's local socket
         let use_ipv4 = endpoint.local_addr()?.is_ipv4();

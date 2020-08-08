@@ -2,7 +2,7 @@ mod chan;
 pub(crate) mod config;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
-use crate::types::{ConecConnection, ControlMsg, CtrlStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream};
 use chan::{CoordChan, CoordChanDriver, CoordChanRef};
 use config::CoordConfig;
 
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 enum CoordEvent {
-    Accepted(ConecConnection, CtrlStream, String),
+    Accepted(ConecConn, CtrlStream, String),
     AcceptError(io::Error),
     ChanClose(String),
 }
@@ -56,7 +56,7 @@ impl CoordInner {
                                 sender.unbounded_send(CoordEvent::AcceptError(e)).unwrap();
                                 return;
                             }
-                            Ok(conn) => ConecConnection::new(conn),
+                            Ok(conn) => ConecConn::new(conn),
                         };
                         let (ctrl, peer) = match conn.connect_ctrl(certs).await.map_err(|e| {
                             io::Error::new(
