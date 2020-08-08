@@ -45,7 +45,7 @@ impl CoordChanInner {
             match self.ctrl.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => Err(CoordChanError::PeerClosed),
-                Poll::Ready(Some(msg)) => msg.map_err(|e| CoordChanError::StreamPoll(e)),
+                Poll::Ready(Some(msg)) => msg.map_err(CoordChanError::StreamPoll),
             }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -65,21 +65,21 @@ impl CoordChanInner {
             }
             match self.ctrl.poll_ready_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(rdy) => rdy.map_err(|e| CoordChanError::SinkReady(e)),
+                Poll::Ready(rdy) => rdy.map_err(CoordChanError::SinkReady),
             }?;
             self.ctrl
                 // unwrap is safe: checked len above
                 .start_send_unpin(self.to_send.pop_front().unwrap())
-                .map_err(|e| CoordChanError::SinkSend(e))?;
+                .map_err(CoordChanError::SinkSend)?;
             sent += 1;
             if sent >= MAX_LOOPS {
                 cont = !self.to_send.is_empty();
                 break;
             }
         }
-        match self.ctrl.poll_flush_unpin(cx) {
-            Poll::Pending => Ok(self.flushing = true),
-            Poll::Ready(Ok(())) => Ok(self.flushing = false),
+        self.flushing = match self.ctrl.poll_flush_unpin(cx) {
+            Poll::Pending => Ok(true),
+            Poll::Ready(Ok(())) => Ok(false),
             Poll::Ready(Err(e)) => Err(CoordChanError::SinkFlush(e)),
         }?;
         Ok(cont)

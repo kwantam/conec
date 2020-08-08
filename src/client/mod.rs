@@ -65,7 +65,7 @@ impl Client {
         let ctrl = conn
             .accept_ctrl(config.id)
             .await
-            .map_err(|e| ClientError::AcceptCtrl(e))?;
+            .map_err(ClientError::AcceptCtrl)?;
 
         // let (sender, events) = mpsc::unbounded();
         Ok(Self {

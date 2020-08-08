@@ -125,7 +125,7 @@ impl ConecConn {
             .next()
             .await
             .ok_or(ConecConnError::EndOfBidiStream)?
-            .map_err(|e| ConecConnError::AcceptBidiStream(e))?;
+            .map_err(ConecConnError::AcceptBidiStream)?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         let certs = self
@@ -137,7 +137,7 @@ impl ConecConn {
         ctrl_stream
             .send_hello(id, certs)
             .await
-            .map_err(|e| ConecConnError::SendHello(e))?;
+            .map_err(ConecConnError::SendHello)?;
         Ok(ctrl_stream)
     }
 
@@ -150,7 +150,7 @@ impl ConecConn {
             .connection
             .open_bi()
             .await
-            .map_err(|e| ConecConnError::OpenBidiStream(e))?;
+            .map_err(ConecConnError::OpenBidiStream)?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         // compute a nonce and send it to the client
@@ -174,13 +174,13 @@ impl ConecConn {
         ctrl_stream
             .send_nonce(nonce.clone())
             .await
-            .map_err(|e| ConecConnError::NonceSend(e))?;
+            .map_err(ConecConnError::NonceSend)?;
 
         // expect the client's hello back
         let peer = ctrl_stream
             .recv_hello(&nonce, certs)
             .await
-            .map_err(|e| ConecConnError::RecvHello(e))?;
+            .map_err(ConecConnError::RecvHello)?;
         Ok((ctrl_stream, peer))
     }
 }
@@ -295,7 +295,7 @@ impl CtrlStream {
         use CtrlStreamError::*;
 
         // first, get the nonce from the server
-        let nonce = match self.try_next().await.map_err(|e| NonceRecv(e))? {
+        let nonce = match self.try_next().await.map_err(NonceRecv)? {
             Some(CoNonce(n)) => Ok(n),
             Some(msg) => Err(WrongMessage(msg, CoNonce("".to_string()))),
             None => Err(EndOfCtrlStream),
@@ -311,10 +311,10 @@ impl CtrlStream {
         // next, send back the hello
         self.send(ClHello(id, new_nonce))
             .await
-            .map_err(|e| SendClHello(e))?;
+            .map_err(SendClHello)?;
 
         // finally, get CoHello (or maybe an Error)
-        match self.try_next().await.map_err(|e| RecvCoHello(e))? {
+        match self.try_next().await.map_err(RecvCoHello)? {
             Some(CoHello) => Ok(()),
             Some(HelloError(e)) => Err(PeerHelloError(e)),
             Some(msg) => Err(WrongMessage(msg, CoHello)),
@@ -325,7 +325,7 @@ impl CtrlStream {
     pub async fn send_nonce(&mut self, nonce: String) -> Result<(), CtrlStreamError> {
         self.send(ControlMsg::CoNonce(nonce))
             .await
-            .map_err(|e| CtrlStreamError::NonceSend(e))
+            .map_err(CtrlStreamError::NonceSend)
     }
 
     pub async fn recv_hello(
@@ -336,7 +336,7 @@ impl CtrlStream {
         use ControlMsg::*;
         use CtrlStreamError::*;
 
-        let (pid, sig) = match self.try_next().await.map_err(|e| RecvClHello(e))? {
+        let (pid, sig) = match self.try_next().await.map_err(RecvClHello)? {
             Some(ClHello(pid, sig)) => Ok((pid, sig)),
             Some(msg) => Err(WrongMessage(msg, ClHello("".to_string(), "".to_string()))),
             None => Err(EndOfCtrlStream),
@@ -360,13 +360,13 @@ impl CtrlStream {
         self.s_send
             .flush()
             .await
-            .map_err(|e| CtrlStreamError::SinkFlush(e))?;
+            .map_err(CtrlStreamError::SinkFlush)?;
         self.s_send
             .get_mut()
             .get_mut()
             .finish()
             .await
-            .map_err(|e| CtrlStreamError::SinkFinish(e))
+            .map_err(CtrlStreamError::SinkFinish)
     }
 }
 
