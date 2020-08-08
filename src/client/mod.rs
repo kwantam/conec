@@ -13,7 +13,7 @@ enum ClientEvent {
 }
 */
 
-#[derive(Debug,Error)]
+#[derive(Debug, Error)]
 pub enum ClientError {
     #[error(display = "Adding certificate authority: {:?}", _0)]
     CertificateAuthority(#[source] webpki::Error),
@@ -62,7 +62,10 @@ impl Client {
         let mut conn = ConecConn::connect(&mut endpoint, &config.coord[..], config.port).await?;
 
         // set up the control stream with the coordinator
-        let ctrl = conn.accept_ctrl(config.id).await.map_err(|e| ClientError::AcceptCtrl(e))?;
+        let ctrl = conn
+            .accept_ctrl(config.id)
+            .await
+            .map_err(|e| ClientError::AcceptCtrl(e))?;
 
         // let (sender, events) = mpsc::unbounded();
         Ok(Self {

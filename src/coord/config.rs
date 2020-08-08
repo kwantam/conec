@@ -1,10 +1,19 @@
 use crate::consts::DFLT_PORT;
 
-use quinn::{Certificate, CertificateChain, PrivateKey};
+use err_derive::Error;
+use quinn::{Certificate, CertificateChain, ParseError, PrivateKey};
 use std::fs::read as fs_read;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+
+#[derive(Debug, Error)]
+pub enum CoordConfigError {
+    #[error(display = "Reading certificate or key file: {:?}", _0)]
+    ReadingCertOrKey(#[source] io::Error),
+    #[error(display = "Parsing certificate or key: {:?}", _0)]
+    ParsingCertOrKey(#[source] ParseError),
+}
 
 #[derive(Clone, Debug)]
 pub struct CoordConfig {
@@ -16,26 +25,21 @@ pub struct CoordConfig {
 }
 
 impl CoordConfig {
-    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> io::Result<Self> {
+    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> Result<Self, CoordConfigError> {
         let key = {
-            let tmp = fs_read(&key_path).map_err(|e| {
-                io::Error::new(e.kind(), format!("failed to read private key: {}", e))
-            })?;
+            let tmp = fs_read(&key_path)?;
             if key_path.extension().map_or(false, |x| x == "der") {
-                PrivateKey::from_der(&tmp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+                PrivateKey::from_der(&tmp)
             } else {
-                PrivateKey::from_pem(&tmp).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+                PrivateKey::from_pem(&tmp)
             }
-        };
+        }?;
         let cert = {
-            let tmp = fs_read(&cert_path).map_err(|e| {
-                io::Error::new(e.kind(), format!("failed to read certificate chain: {}", e))
-            })?;
+            let tmp = fs_read(&cert_path)?;
             if cert_path.extension().map_or(false, |x| x == "der") {
                 CertificateChain::from_certs(Certificate::from_der(&tmp))
             } else {
-                CertificateChain::from_pem(&tmp)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+                CertificateChain::from_pem(&tmp)?
             }
         };
         Ok(Self {

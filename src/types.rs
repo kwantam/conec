@@ -73,10 +73,10 @@ pub enum CtrlStreamError {
     NonceSend(#[error(source, no_from)] io::Error),
     #[error(display = "Bad client auth message")]
     BadClientAuth,
-    #[error(display = "flush() failed: {:?}", _0)]
-    FlushError(#[error(source, no_from)] io::Error),
-    #[error(display = "finish() failed: {:?}", _0)]
-    FinishError(#[error(source, no_from)] WriteError),
+    #[error(display = "Sink flush: {:?}", _0)]
+    SinkFlush(#[error(source, no_from)] io::Error),
+    #[error(display = "Sink finish: {:?}", _0)]
+    SinkFinish(#[error(source, no_from)] WriteError),
 }
 
 impl ConecConn {
@@ -360,13 +360,13 @@ impl CtrlStream {
         self.s_send
             .flush()
             .await
-            .map_err(|e| CtrlStreamError::FlushError(e))?;
+            .map_err(|e| CtrlStreamError::SinkFlush(e))?;
         self.s_send
             .get_mut()
             .get_mut()
             .finish()
             .await
-            .map_err(|e| CtrlStreamError::FinishError(e))
+            .map_err(|e| CtrlStreamError::SinkFinish(e))
     }
 }
 
