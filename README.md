@@ -73,8 +73,8 @@ channel a separate QUIC connection directly to the other endpoint.
 
 - error handling
     - [x] eliminate `anyhow` in favor of unboxed Error types
-    - [ ] create ConecError type to give better error msgs
-    - [ ] switch to ConecError
+    - [x] create ConecError type to give better error msgs
+    - [x] switch to ConecError
 - basic functionality
     - [x] per-channel driver @ Coord
     - [ ] Client driver - what is the API for this? one driver for whole client?
