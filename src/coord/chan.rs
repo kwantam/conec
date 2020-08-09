@@ -155,9 +155,7 @@ impl Future for CoordChanDriver {
         let inner = &mut *self.0.lock().unwrap();
         match &inner.driver {
             Some(w) if w.will_wake(cx.waker()) => (),
-            _ => {
-                inner.driver = Some(cx.waker().clone());
-            }
+            _ => inner.driver = Some(cx.waker().clone()),
         };
         loop {
             let mut keep_going = false;
@@ -173,6 +171,7 @@ impl Future for CoordChanDriver {
             }
         }
         if inner.ref_count == 0 {
+            // driver is the only one left holding a ref to CoordChan; kill driver
             Poll::Ready(Ok(()))
         } else {
             Poll::Pending

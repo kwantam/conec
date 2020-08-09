@@ -25,9 +25,9 @@ pub enum ClientError {
     AcceptCtrl(#[error(source, no_from)] ConecConnError),
 }
 
-pub(super) struct ClientChan {
-    pub(super) conn: ConecConn,
-    pub(super) ctrl: CtrlStream,
+struct ClientChan {
+    conn: ConecConn,
+    ctrl: CtrlStream,
 }
 
 pub struct Client {
