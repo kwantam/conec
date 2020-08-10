@@ -1,12 +1,14 @@
+mod chan;
 pub(crate) mod config;
-mod incomingstream;
+mod istream;
 
 use super::consts::ALPN_CONEC;
-use super::types::{ConecConn, ConecConnError, CtrlStream};
+use super::types::{ConecConn, ConecConnError};
+pub use chan::{ClientChanError, ConnectingOutStream};
+use chan::{ClientChan, ClientChanRef};
 use config::ClientConfig;
-use futures::channel::oneshot;
-pub use incomingstream::IncomingStreams;
-use incomingstream::{IncomingStreamsDriver, IncomingStreamsRef};
+pub use istream::{ConnectingInStream, IncomingStreams};
+use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
 use quinn::{ClientConfigBuilder, Endpoint, EndpointError};
@@ -21,13 +23,6 @@ pub enum ClientError {
     Connect(#[source] ConecConnError),
     #[error(display = "Accepting control stream from coordinator: {:?}", _0)]
     AcceptCtrl(#[error(source, no_from)] ConecConnError),
-}
-
-struct ClientChan {
-    conn: ConecConn,
-    ctrl: CtrlStream,
-    incs_bye_in: oneshot::Receiver<()>,
-    incs_bye_out: oneshot::Sender<()>,
 }
 
 pub struct Client {
@@ -63,27 +58,23 @@ impl Client {
             .await
             .map_err(ClientError::AcceptCtrl)?;
 
+        // set up the client-coordinator channel
+        let (inner, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
+        let coord = ClientChan(inner);
+
         // set up the incoming streams listener
-        let (istrms, incs_bye_in, incs_bye_out) = {
-            let (client, incs_bye_in) = oneshot::channel();
-            let (incs_bye_out, bye) = oneshot::channel();
-            let inner = IncomingStreamsRef::new(client, bye, iuni);
+        let istrms = {
+            let inner = IncomingStreamsRef::new(i_client, i_bye, iuni);
             let driver = IncomingStreamsDriver(inner.clone());
             tokio::spawn(async move { driver.await });
-            (IncomingStreams(inner), incs_bye_in, incs_bye_out)
+            IncomingStreams(inner)
         };
 
-        Ok((
-            Self {
-                endpoint,
-                coord: ClientChan {
-                    conn,
-                    ctrl,
-                    incs_bye_in,
-                    incs_bye_out,
-                },
-            },
-            istrms,
-        ))
+        Ok((Self { endpoint, coord }, istrms))
+    }
+
+    /// open a new proxy stream to another client
+    pub fn new_stream(&self, to: String, cid: usize) -> ConnectingOutStream {
+        self.coord.new_stream(to, cid)
     }
 }
