@@ -6,13 +6,22 @@ use futures::channel::oneshot;
 use futures::prelude::*;
 use quinn::{ConnectionError, IncomingUniStreams};
 use std::collections::VecDeque;
+use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 
-pub type ConnectingInStream = oneshot::Receiver<(String, u32, InStream)>;
+#[derive(Debug, Error)]
+pub enum InStreamError {
+    #[error(display = "Reading InitMsg from stream: {:?}", _0)]
+    StreamRead(#[source] io::Error),
+    #[error(display = "Deserializing InitMsg")]
+    InitMsg,
+}
+
+pub type ConnectingInStream = oneshot::Receiver<Result<(String, u32, InStream), InStreamError>>;
 
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
@@ -55,9 +64,21 @@ impl IncomingStreamsInner {
                     FramedRead::new(recv, LengthDelimitedCodec::new()),
                     SymmetricalBincode::<(String, u32)>::default(),
                 );
-                let (peer, chanid) = read_stream.try_next().await.unwrap().unwrap();
+                let (peer, chanid) = match read_stream.try_next().await {
+                    Err(e) => {
+                        sender.send(Err(InStreamError::StreamRead(e))).ok();
+                        return;
+                    }
+                    Ok(msg) => match msg {
+                        Some(peer_chanid) => peer_chanid,
+                        None => {
+                            sender.send(Err(InStreamError::InitMsg)).ok();
+                            return;
+                        }
+                    },
+                };
                 let instream = InStream::from_framed(read_stream.into_inner());
-                sender.send((peer, chanid, instream)).ok();
+                sender.send(Ok((peer, chanid, instream))).ok();
             });
             self.incoming.push_back(receiver);
             if let Some(task) = self.incoming_reader.take() {

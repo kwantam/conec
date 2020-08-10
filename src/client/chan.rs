@@ -5,6 +5,7 @@ use crate::util;
 use err_derive::Error;
 use futures::channel::oneshot;
 use futures::prelude::*;
+use quinn::ConnectionError;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -13,7 +14,20 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedWrite, LengthDelimitedCodec};
 
-pub type ConnectingOutStream = oneshot::Receiver<OutStream>;
+#[derive(Debug, Error)]
+pub enum OutStreamError {
+    #[error(display = "Coordinator responded with error")]
+    Coord,
+    #[error(display = "Sending initial message: {:?}", _0)]
+    InitMsg(#[error(source, no_from)] io::Error),
+    #[error(display = "Flushing init message: {:?}", _0)]
+    Flush(#[error(source, no_from)] io::Error),
+    #[error(display = "Opening unidirectional channel: {:?}", _0)]
+    OpenUni(#[source] ConnectionError),
+}
+
+pub type ConnectingOutStream = oneshot::Receiver<Result<OutStream, OutStreamError>>;
+type ConnectingOutStreamHandle = oneshot::Sender<Result<OutStream, OutStreamError>>;
 
 #[derive(Debug, Error)]
 pub enum ClientChanError {
@@ -38,13 +52,14 @@ pub enum ClientChanError {
 pub(super) struct ClientChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
+    id: String,
     incs_bye_in: oneshot::Receiver<()>,
     incs_bye_out: Option<oneshot::Sender<()>>,
     ref_count: usize,
     driver: Option<Waker>,
     driver_lost: bool,
     to_send: VecDeque<ControlMsg>,
-    new_streams: HashMap<(String, u32), Option<oneshot::Sender<OutStream>>>,
+    new_streams: HashMap<(String, u32), Option<ConnectingOutStreamHandle>>,
     flushing: bool,
 }
 
@@ -66,7 +81,7 @@ impl ClientChanInner {
     fn get_new_stream(
         &mut self,
         new_chan_key: &(String, u32),
-    ) -> Result<oneshot::Sender<OutStream>, ClientChanError> {
+    ) -> Result<ConnectingOutStreamHandle, ClientChanError> {
         let (peer, sid) = new_chan_key;
         if let Some(chan) = self.new_streams.get_mut(new_chan_key) {
             if let Some(chan) = chan.take() {
@@ -92,26 +107,42 @@ impl ClientChanInner {
                     NewStreamOk(peer, sid) => {
                         let new_chan_key = (peer, sid);
                         let chan = self.get_new_stream(&new_chan_key)?;
-                        let (peer, sid) = new_chan_key;
+                        let (_, sid) = new_chan_key;
+                        let client_id = self.id.clone();
                         let uni = self.conn.open_uni();
                         tokio::spawn(async move {
-                            let send = uni.await.unwrap(); // XXX err to chan?
+                            // get the unidirectional channel
+                            let send = match uni.await {
+                                Ok(send) => send,
+                                Err(e) => {
+                                    chan.send(Err(OutStreamError::OpenUni(e))).ok();
+                                    return;
+                                }
+                            };
+
+                            // write our name and channel id to it
                             let mut write_stream = SymmetricallyFramed::new(
                                 FramedWrite::new(send, LengthDelimitedCodec::new()),
                                 SymmetricalBincode::<(String, u32)>::default(),
                             );
-                            // XXX XXX XXX here, should be writing client name, not peer name XXX XXX XXX
-                            write_stream.send((peer, sid)).await.unwrap(); // XXX err to chan?
-                            write_stream.flush().await.unwrap(); // XXX err to chan?
+                            if let Err(e) = write_stream.send((client_id, sid)).await {
+                                chan.send(Err(OutStreamError::InitMsg(e))).ok();
+                                return;
+                            }
+                            if let Err(e) = write_stream.flush().await {
+                                chan.send(Err(OutStreamError::Flush(e))).ok();
+                                return;
+                            };
+
                             let outstream = OutStream::from_framed(write_stream.into_inner());
-                            chan.send(outstream).ok();
+                            chan.send(Ok(outstream)).ok();
                         });
                         Ok(())
                     }
                     NewStreamErr(peer, sid) => {
                         let new_chan_key = (peer, sid);
                         let chan = self.get_new_stream(&new_chan_key)?;
-                        drop(chan); // XXX err to chan?
+                        chan.send(Err(OutStreamError::Coord)).ok();
                         Ok(())
                     }
                     _ => Err(WrongMessage(msg)),
@@ -166,6 +197,7 @@ impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
+        id: String,
     ) -> (Self, oneshot::Sender<()>, oneshot::Receiver<()>) {
         let (i_client, incs_bye_in) = oneshot::channel();
         let (incs_bye_out, i_bye) = oneshot::channel();
@@ -173,6 +205,7 @@ impl ClientChanRef {
             Self(Arc::new(Mutex::new(ClientChanInner {
                 conn,
                 ctrl,
+                id,
                 incs_bye_in,
                 incs_bye_out: Some(incs_bye_out),
                 ref_count: 0,
