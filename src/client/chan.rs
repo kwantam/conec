@@ -100,6 +100,7 @@ impl ClientChanInner {
                                 FramedWrite::new(send, LengthDelimitedCodec::new()),
                                 SymmetricalBincode::<(String, u32)>::default(),
                             );
+                            // XXX XXX XXX here, should be writing client name, not peer name XXX XXX XXX
                             write_stream.send((peer, sid)).await.unwrap(); // XXX err to chan?
                             write_stream.flush().await.unwrap(); // XXX err to chan?
                             let outstream = OutStream::from_framed(write_stream.into_inner());
