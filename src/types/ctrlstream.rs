@@ -1,6 +1,6 @@
-use crate::consts::VERSION;
+use super::iostream::{FramedRecvStream, FramedSendStream};
 use super::ControlMsg;
-use super::iostream::{FramedSendStream, FramedRecvStream, to_framed_send, to_framed_recv};
+use crate::consts::VERSION;
 
 use err_derive::Error;
 use futures::prelude::*;
@@ -8,8 +8,8 @@ use quinn::{CertificateChain, RecvStream, SendStream, WriteError};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio_serde::formats::SymmetricalBincode;
-use tokio_serde::SymmetricallyFramed;
+use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[derive(Debug, Error)]
 pub enum CtrlStreamError {
@@ -55,11 +55,11 @@ impl CtrlStream {
     pub(super) fn new(s: SendStream, r: RecvStream) -> Self {
         CtrlStream {
             s_send: SymmetricallyFramed::new(
-                to_framed_send(s),
+                FramedWrite::new(s, LengthDelimitedCodec::new()),
                 SymmetricalBincode::<ControlMsg>::default(),
             ),
             s_recv: SymmetricallyFramed::new(
-                to_framed_recv(r),
+                FramedRead::new(r, LengthDelimitedCodec::new()),
                 SymmetricalBincode::<ControlMsg>::default(),
             ),
         }
@@ -176,4 +176,3 @@ impl Sink<ControlMsg> for CtrlStream {
         self.s_send.poll_close_unpin(cx)
     }
 }
-

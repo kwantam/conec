@@ -7,24 +7,15 @@ use std::task::{Context, Poll};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 pub type FramedRecvStream = FramedRead<RecvStream, LengthDelimitedCodec>;
-pub fn to_framed_recv(r: RecvStream) -> FramedRecvStream {
-    FramedRead::new(r, LengthDelimitedCodec::new())
-}
-
 pub type FramedSendStream = FramedWrite<SendStream, LengthDelimitedCodec>;
-pub fn to_framed_send(s: SendStream) -> FramedSendStream {
-    FramedWrite::new(s, LengthDelimitedCodec::new())
-}
 
 pub struct InStream {
     s_recv: FramedRecvStream,
 }
 
 impl InStream {
-    fn new(r: RecvStream) -> Self {
-        InStream {
-            s_recv: to_framed_recv(r),
-        }
+    pub(crate) fn from_framed(s_recv: FramedRecvStream) -> Self {
+        InStream { s_recv }
     }
 }
 
@@ -41,15 +32,17 @@ pub struct OutStream {
 }
 
 impl OutStream {
-    fn new(s: SendStream) -> Self {
-        OutStream {
-            s_send: to_framed_send(s),
-        }
+    pub(crate) fn from_framed(s_send: FramedSendStream) -> Self {
+        OutStream { s_send }
     }
 
     pub async fn finish(&mut self) -> io::Result<()> {
         self.s_send.flush().await?;
-        self.s_send.get_mut().finish().await.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        self.s_send
+            .get_mut()
+            .finish()
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 }
 

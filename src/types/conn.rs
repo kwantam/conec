@@ -1,5 +1,5 @@
-use crate::consts::VERSION;
 use super::{CtrlStream, CtrlStreamError};
+use crate::consts::VERSION;
 
 use err_derive::Error;
 use futures::prelude::*;
@@ -40,7 +40,6 @@ pub enum ConecConnError {
 
 pub(crate) struct ConecConn {
     connection: Connection,
-    iu_streams: IncomingUniStreams,
     ib_streams: IncomingBiStreams,
 }
 
@@ -49,7 +48,7 @@ impl ConecConn {
         endpoint: &mut Endpoint,
         caddr: &str,
         cport: u16,
-    ) -> Result<Self, ConecConnError> {
+    ) -> Result<(Self, IncomingUniStreams), ConecConnError> {
         // only attempt to connect to an address of the same type as the endpoint's local socket
         let use_ipv4 = endpoint.local_addr()?.is_ipv4();
         let mut resolved = false;
@@ -70,18 +69,20 @@ impl ConecConn {
         }
     }
 
-    pub fn new(nc: NewConnection) -> Self {
+    pub fn new(nc: NewConnection) -> (Self, IncomingUniStreams) {
         let NewConnection {
             connection: conn,
             uni_streams: u_str,
             bi_streams: b_str,
             ..
         } = nc;
-        Self {
-            connection: conn,
-            iu_streams: u_str,
-            ib_streams: b_str,
-        }
+        (
+            Self {
+                connection: conn,
+                ib_streams: b_str,
+            },
+            u_str,
+        )
     }
 
     pub(crate) async fn accept_ctrl(&mut self, id: String) -> Result<CtrlStream, ConecConnError> {
@@ -98,7 +99,6 @@ impl ConecConn {
             .authentication_data()
             .peer_certificates
             .ok_or(ConecConnError::CertificateChain)?;
-        // FIXME fix error type here
         ctrl_stream
             .send_hello(id, certs)
             .await

@@ -1,17 +1,15 @@
 pub(crate) mod config;
+mod incomingstream;
 
 use super::consts::ALPN_CONEC;
 use super::types::{ConecConn, ConecConnError, CtrlStream};
 use config::ClientConfig;
+use futures::channel::oneshot;
+pub use incomingstream::IncomingStreams;
+use incomingstream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
 use quinn::{ClientConfigBuilder, Endpoint, EndpointError};
-
-/*
-enum ClientEvent {
-    Error(io::Error),
-}
-*/
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -28,21 +26,18 @@ pub enum ClientError {
 struct ClientChan {
     conn: ConecConn,
     ctrl: CtrlStream,
+    incs_bye_in: oneshot::Receiver<()>,
+    incs_bye_out: oneshot::Sender<()>,
 }
 
 pub struct Client {
     endpoint: Endpoint,
-    // incoming: Incoming,
     coord: ClientChan,
-    /*
-    sender: mpsc::UnboundedSender<ClientEvent>,
-    events: mpsc::UnboundedReceiver<ClientEvent>,
-    */
 }
 
 impl Client {
     /// Construct a new Client
-    pub async fn new(config: ClientConfig) -> Result<Self, ClientError> {
+    pub async fn new(config: ClientConfig) -> Result<(Self, IncomingStreams), ClientError> {
         // build the client configuration
         let mut qcc = ClientConfigBuilder::default();
         qcc.protocols(ALPN_CONEC);
@@ -59,7 +54,18 @@ impl Client {
         let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
-        let mut conn = ConecConn::connect(&mut endpoint, &config.coord[..], config.port).await?;
+        let (mut conn, iuni) =
+            ConecConn::connect(&mut endpoint, &config.coord[..], config.port).await?;
+
+        // set up the incoming streams listener
+        let (istrms, incs_bye_in, incs_bye_out) = {
+            let (client, incs_bye_in) = oneshot::channel();
+            let (incs_bye_out, bye) = oneshot::channel();
+            let inner = IncomingStreamsRef::new(client, bye, iuni);
+            let driver = IncomingStreamsDriver(inner.clone());
+            tokio::spawn(async move { driver.await });
+            (IncomingStreams(inner), incs_bye_in, incs_bye_out)
+        };
 
         // set up the control stream with the coordinator
         let ctrl = conn
@@ -68,12 +74,17 @@ impl Client {
             .map_err(ClientError::AcceptCtrl)?;
 
         // let (sender, events) = mpsc::unbounded();
-        Ok(Self {
-            endpoint,
-            // incoming,
-            coord: ClientChan { conn, ctrl },
-            // sender,
-            // events,
-        })
+        Ok((
+            Self {
+                endpoint,
+                coord: ClientChan {
+                    conn,
+                    ctrl,
+                    incs_bye_in,
+                    incs_bye_out,
+                },
+            },
+            istrms,
+        ))
     }
 }

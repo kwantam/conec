@@ -2,11 +2,11 @@ mod conn;
 mod ctrlstream;
 mod iostream;
 
-pub(crate) use ctrlstream::CtrlStream;
 pub(crate) use conn::ConecConn;
-pub use ctrlstream::CtrlStreamError;
 pub use conn::ConecConnError;
-pub use iostream::{InStream, OutStream, InOutStream};
+pub(crate) use ctrlstream::CtrlStream;
+pub use ctrlstream::CtrlStreamError;
+pub use iostream::{InOutStream, InStream, OutStream};
 
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;

@@ -5,6 +5,7 @@ use crate::types::{ConecConn, ControlMsg, CtrlStream};
 use err_derive::Error;
 use futures::channel::mpsc;
 use futures::prelude::*;
+use quinn::IncomingUniStreams;
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
@@ -28,6 +29,7 @@ pub enum CoordChanError {
 pub(super) struct CoordChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
+    iuni: IncomingUniStreams,
     peer: String,
     coord: mpsc::UnboundedSender<CoordEvent>,
     ref_count: usize,
@@ -121,6 +123,7 @@ impl CoordChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
+        iuni: IncomingUniStreams,
         peer: String,
         coord: mpsc::UnboundedSender<CoordEvent>,
     ) -> Self {
@@ -130,6 +133,7 @@ impl CoordChanRef {
         Self(Arc::new(Mutex::new(CoordChanInner {
             conn,
             ctrl,
+            iuni,
             peer,
             coord,
             ref_count: 0,
@@ -141,9 +145,7 @@ impl CoordChanRef {
     }
 }
 
-pub(super) struct CoordChan {
-    pub(super) inner: CoordChanRef,
-}
+pub(super) struct CoordChan(pub(super) CoordChanRef);
 
 #[must_use = "CoordChanDriver must be spawned!"]
 pub(super) struct CoordChanDriver(pub(super) CoordChanRef);

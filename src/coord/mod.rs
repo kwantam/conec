@@ -11,7 +11,7 @@ use futures::channel::mpsc;
 use futures::prelude::*;
 use quinn::{
     crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
-    ServerConfigBuilder,
+    IncomingUniStreams, ServerConfigBuilder,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -33,7 +33,7 @@ pub enum CoordError {
 }
 
 enum CoordEvent {
-    Accepted(ConecConn, CtrlStream, String),
+    Accepted(ConecConn, CtrlStream, IncomingUniStreams, String),
     AcceptError(CoordError),
     ChanClose(String),
 }
@@ -63,7 +63,7 @@ impl CoordInner {
                     tokio::spawn(async move {
                         use CoordError::*;
                         use CoordEvent::*;
-                        let mut conn = match incoming.await {
+                        let (mut conn, iuni) = match incoming.await {
                             Err(e) => {
                                 sender.unbounded_send(AcceptError(Connect(e))).unwrap();
                                 return;
@@ -77,7 +77,9 @@ impl CoordInner {
                             }
                             Ok(ctrl_peer) => ctrl_peer,
                         };
-                        sender.unbounded_send(Accepted(conn, ctrl, peer)).unwrap();
+                        sender
+                            .unbounded_send(Accepted(conn, ctrl, iuni, peer))
+                            .unwrap();
                     });
                     Ok(())
                 }
@@ -100,9 +102,10 @@ impl CoordInner {
                         // XXX what do we do here?
                         println!("err: {}", e);
                     }
-                    Accepted(conn, mut ctrl, peer) => {
+                    Accepted(conn, ctrl, iuni, peer) => {
                         if self.clients.get(&peer[..]).is_some() {
                             tokio::spawn(async move {
+                                let mut ctrl = ctrl;
                                 println!("error: name '{}' already in use", peer);
                                 ctrl.send(ControlMsg::HelloError("name in use".to_string()))
                                     .await
@@ -112,14 +115,19 @@ impl CoordInner {
                                 drop(conn);
                             });
                         } else {
-                            let inner =
-                                CoordChanRef::new(conn, ctrl, peer.clone(), self.sender.clone());
+                            let inner = CoordChanRef::new(
+                                conn,
+                                ctrl,
+                                iuni,
+                                peer.clone(),
+                                self.sender.clone(),
+                            );
 
                             // spawn channel driver
                             let driver = CoordChanDriver(inner.clone());
                             tokio::spawn(async move { driver.await });
 
-                            self.clients.insert(peer, CoordChan { inner });
+                            self.clients.insert(peer, CoordChan(inner));
                         }
                     }
                     ChanClose(client) => {
