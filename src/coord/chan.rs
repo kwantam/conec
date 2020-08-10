@@ -41,7 +41,7 @@ pub(super) struct CoordChanInner {
 
 impl CoordChanInner {
     // read the next message from the recv channel
-    fn drive_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
+    fn drive_ctrl_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut recvd = 0;
         loop {
             match self.ctrl.poll_next_unpin(cx) {
@@ -58,7 +58,7 @@ impl CoordChanInner {
     }
 
     // send something on the send channel
-    fn drive_send(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
+    fn drive_ctrl_send(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut sent = 0;
         let mut cont = false;
         loop {
@@ -145,8 +145,6 @@ impl CoordChanRef {
     }
 }
 
-pub(super) struct CoordChan(pub(super) CoordChanRef);
-
 #[must_use = "CoordChanDriver must be spawned!"]
 pub(super) struct CoordChanDriver(pub(super) CoordChanRef);
 
@@ -161,9 +159,9 @@ impl Future for CoordChanDriver {
         };
         loop {
             let mut keep_going = false;
-            keep_going |= inner.drive_recv(cx)?;
+            keep_going |= inner.drive_ctrl_recv(cx)?;
             if !inner.to_send.is_empty() || inner.flushing {
-                keep_going |= inner.drive_send(cx)?;
+                keep_going |= inner.drive_ctrl_send(cx)?;
             }
             /*
             inner.handle_events();
@@ -193,3 +191,5 @@ impl Drop for CoordChanDriver {
             .ok();
     }
 }
+
+pub(super) struct CoordChan(pub(super) CoordChanRef);

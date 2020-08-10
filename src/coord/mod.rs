@@ -190,40 +190,6 @@ impl std::ops::Deref for CoordRef {
     }
 }
 
-pub struct Coord {
-    inner: CoordRef,
-}
-
-impl Coord {
-    /// construct a new coord
-    pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
-        // build configuration
-        let mut qsc = ServerConfigBuilder::default();
-        qsc.protocols(ALPN_CONEC);
-        qsc.use_stateless_retry(config.stateless_retry);
-        if config.keylog {
-            qsc.enable_keylog();
-        }
-        qsc.certificate(config.cert.clone(), config.key)?;
-
-        // build QUIC endpoint
-        let mut endpoint = Endpoint::builder();
-        endpoint.listen(qsc.build());
-        let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
-
-        let inner = CoordRef::new(endpoint, incoming, config.cert);
-        let driver = CoordDriver(inner.clone());
-        tokio::spawn(async move { driver.await });
-
-        Ok(Self { inner })
-    }
-
-    pub fn num_clients(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
-        inner.clients.len()
-    }
-}
-
 #[must_use = "CoordDriver must be spawned!"]
 struct CoordDriver(CoordRef);
 
@@ -251,5 +217,37 @@ impl Future for CoordDriver {
         } else {
             Poll::Pending
         }
+    }
+}
+
+pub struct Coord(CoordRef);
+
+impl Coord {
+    /// construct a new coord
+    pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
+        // build configuration
+        let mut qsc = ServerConfigBuilder::default();
+        qsc.protocols(ALPN_CONEC);
+        qsc.use_stateless_retry(config.stateless_retry);
+        if config.keylog {
+            qsc.enable_keylog();
+        }
+        qsc.certificate(config.cert.clone(), config.key)?;
+
+        // build QUIC endpoint
+        let mut endpoint = Endpoint::builder();
+        endpoint.listen(qsc.build());
+        let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
+
+        let inner = CoordRef::new(endpoint, incoming, config.cert);
+        let driver = CoordDriver(inner.clone());
+        tokio::spawn(async move { driver.await });
+
+        Ok(Self(inner))
+    }
+
+    pub fn num_clients(&self) -> usize {
+        let inner = self.0.lock().unwrap();
+        inner.clients.len()
     }
 }

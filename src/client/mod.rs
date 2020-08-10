@@ -57,6 +57,12 @@ impl Client {
         let (mut conn, iuni) =
             ConecConn::connect(&mut endpoint, &config.coord[..], config.port).await?;
 
+        // set up the control stream with the coordinator
+        let ctrl = conn
+            .accept_ctrl(config.id)
+            .await
+            .map_err(ClientError::AcceptCtrl)?;
+
         // set up the incoming streams listener
         let (istrms, incs_bye_in, incs_bye_out) = {
             let (client, incs_bye_in) = oneshot::channel();
@@ -67,13 +73,6 @@ impl Client {
             (IncomingStreams(inner), incs_bye_in, incs_bye_out)
         };
 
-        // set up the control stream with the coordinator
-        let ctrl = conn
-            .accept_ctrl(config.id)
-            .await
-            .map_err(ClientError::AcceptCtrl)?;
-
-        // let (sender, events) = mpsc::unbounded();
         Ok((
             Self {
                 endpoint,
