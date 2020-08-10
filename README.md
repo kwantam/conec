@@ -77,8 +77,9 @@ channel a separate QUIC connection directly to the other endpoint.
     - [x] switch to ConecError
 - basic functionality
     - [x] per-channel driver @ Coord
-    - [ ] Client driver - what is the API for this? one driver for whole client?
+    - [x] Client driver - what is the API for this? one driver for whole client?
     - [x] Client connection: switch handshake order, detect dup-id earlier
+    - [ ] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg
     - [ ] proxied streams through coordinator - ProxStream driver
 - future features
     - [ ] direct Client-to-Client channels
