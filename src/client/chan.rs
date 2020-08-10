@@ -81,16 +81,16 @@ impl ClientChanInner {
     fn get_new_stream(
         &mut self,
         sid: u32,
-        peer: &String,
+        peer: &str,
     ) -> Result<ConnectingOutStreamHandle, ClientChanError> {
         if let Some(chan) = self.new_streams.get_mut(&sid) {
             if let Some(chan) = chan.take() {
                 Ok(chan)
             } else {
-                Err(ClientChanError::StaleStream(peer.clone(), sid))
+                Err(ClientChanError::StaleStream(peer.to_string(), sid))
             }
         } else {
-            Err(ClientChanError::NonexistentStream(peer.clone(), sid))
+            Err(ClientChanError::NonexistentStream(peer.to_string(), sid))
         }
     }
 
@@ -274,7 +274,7 @@ impl ClientChan {
         let inner = &mut *self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
-        let new_stream_req = ControlMsg::NewStreamReq(to.clone(), sid);
+        let new_stream_req = ControlMsg::NewStreamReq(to, sid);
         if inner.new_streams.get(&sid).is_some() {
             return Err(ClientChanError::StreamNameInUse);
         }

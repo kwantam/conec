@@ -21,7 +21,9 @@ pub enum InStreamError {
     InitMsg,
 }
 
-pub type ConnectingInStream = oneshot::Receiver<Result<(String, u32, InStream), InStreamError>>;
+pub type NewInStream = (String, u32, InStream);
+
+pub type ConnectingInStream = oneshot::Receiver<Result<NewInStream, InStreamError>>;
 
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
