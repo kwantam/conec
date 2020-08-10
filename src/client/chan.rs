@@ -59,7 +59,7 @@ pub(super) struct ClientChanInner {
     driver: Option<Waker>,
     driver_lost: bool,
     to_send: VecDeque<ControlMsg>,
-    new_streams: HashMap<(String, u32), Option<ConnectingOutStreamHandle>>,
+    new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
     flushing: bool,
 }
 
@@ -80,17 +80,17 @@ impl ClientChanInner {
 
     fn get_new_stream(
         &mut self,
-        new_chan_key: &(String, u32),
+        sid: u32,
+        peer: &String,
     ) -> Result<ConnectingOutStreamHandle, ClientChanError> {
-        let (peer, sid) = new_chan_key;
-        if let Some(chan) = self.new_streams.get_mut(new_chan_key) {
+        if let Some(chan) = self.new_streams.get_mut(&sid) {
             if let Some(chan) = chan.take() {
                 Ok(chan)
             } else {
-                Err(ClientChanError::StaleStream(peer.clone(), *sid))
+                Err(ClientChanError::StaleStream(peer.clone(), sid))
             }
         } else {
-            Err(ClientChanError::NonexistentStream(peer.clone(), *sid))
+            Err(ClientChanError::NonexistentStream(peer.clone(), sid))
         }
     }
 
@@ -105,9 +105,7 @@ impl ClientChanInner {
                 Poll::Ready(Some(Err(e))) => Err(StreamPoll(e)),
                 Poll::Ready(Some(Ok(msg))) => match msg {
                     NewStreamOk(peer, sid) => {
-                        let new_chan_key = (peer, sid);
-                        let chan = self.get_new_stream(&new_chan_key)?;
-                        let (_, sid) = new_chan_key;
+                        let chan = self.get_new_stream(sid, &peer)?;
                         let client_id = self.id.clone();
                         let uni = self.conn.open_uni();
                         tokio::spawn(async move {
@@ -134,14 +132,14 @@ impl ClientChanInner {
                                 return;
                             };
 
+                            // send resulting OutStream to the receiver
                             let outstream = OutStream::from_framed(write_stream.into_inner());
                             chan.send(Ok(outstream)).ok();
                         });
                         Ok(())
                     }
                     NewStreamErr(peer, sid) => {
-                        let new_chan_key = (peer, sid);
-                        let chan = self.get_new_stream(&new_chan_key)?;
+                        let chan = self.get_new_stream(sid, &peer)?;
                         chan.send(Err(OutStreamError::Coord)).ok();
                         Ok(())
                     }
@@ -276,15 +274,14 @@ impl ClientChan {
         let inner = &mut *self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
-        let new_chan_req = ControlMsg::NewStreamReq(to.clone(), sid);
-        let new_chan_key = (to, sid);
-        if inner.new_streams.get(&new_chan_key).is_some() {
+        let new_stream_req = ControlMsg::NewStreamReq(to.clone(), sid);
+        if inner.new_streams.get(&sid).is_some() {
             return Err(ClientChanError::StreamNameInUse);
         }
 
         // send the coordinator a request and record the send side of the channel
-        inner.to_send.push_back(new_chan_req);
-        inner.new_streams.insert(new_chan_key, Some(sender));
+        inner.to_send.push_back(new_stream_req);
+        inner.new_streams.insert(sid, Some(sender));
 
         // make sure the driver wakes up
         inner.wake();
