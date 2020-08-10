@@ -4,8 +4,8 @@ mod istream;
 
 use super::consts::ALPN_CONEC;
 use super::types::{ConecConn, ConecConnError};
+use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingOutStream};
-use chan::{ClientChan, ClientChanRef};
 use config::ClientConfig;
 pub use istream::{ConnectingInStream, IncomingStreams};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
@@ -58,8 +58,10 @@ impl Client {
             .await
             .map_err(ClientError::AcceptCtrl)?;
 
-        // set up the client-coordinator channel
+        // set up the client-coordinator channel and spawn its driver
         let (inner, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
+        let driver = ClientChanDriver(inner.clone());
+        tokio::spawn(async move { driver.await });
         let coord = ClientChan(inner);
 
         // set up the incoming streams listener
@@ -74,7 +76,7 @@ impl Client {
     }
 
     /// open a new proxy stream to another client
-    pub fn new_stream(&self, to: String, cid: usize) -> ConnectingOutStream {
+    pub fn new_stream(&self, to: String, cid: u32) -> Result<ConnectingOutStream, ClientChanError> {
         self.coord.new_stream(to, cid)
     }
 }

@@ -5,7 +5,7 @@ use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
     CertificateChain, ConnectError, Connection, ConnectionError, Endpoint, IncomingBiStreams,
-    IncomingUniStreams, NewConnection,
+    IncomingUniStreams, NewConnection, OpenUni,
 };
 use rand::{thread_rng, Rng};
 use std::io;
@@ -147,5 +147,9 @@ impl ConecConn {
             .await
             .map_err(ConecConnError::RecvHello)?;
         Ok((ctrl_stream, peer))
+    }
+
+    pub(crate) fn open_uni(&mut self) -> OpenUni {
+        self.connection.open_uni()
     }
 }

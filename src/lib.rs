@@ -6,6 +6,7 @@ pub mod coord;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod util;
 
 pub use client::{config::ClientConfig, Client};
 pub use coord::{config::CoordConfig, Coord};

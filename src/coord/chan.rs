@@ -1,6 +1,7 @@
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
 use crate::types::{ConecConn, ControlMsg, CtrlStream};
+use crate::util;
 
 use err_derive::Error;
 use futures::channel::mpsc;
@@ -18,12 +19,8 @@ pub enum CoordChanError {
     PeerClosed,
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
-    #[error(display = "Sink ready polling: {:?}", _0)]
-    SinkReady(#[error(source, no_from)] io::Error),
-    #[error(display = "Sink flush polling: {:?}", _0)]
-    SinkFlush(#[error(source, no_from)] io::Error),
-    #[error(display = "Sink start send: {:?}", _0)]
-    SinkSend(#[error(source, no_from)] io::Error),
+    #[error(display = "Control sink: {:?}", _0)]
+    Sink(#[error(source, no_from)] util::SinkError),
 }
 
 pub(super) struct CoordChanInner {
@@ -59,32 +56,8 @@ impl CoordChanInner {
 
     // send something on the send channel
     fn drive_ctrl_send(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
-        let mut sent = 0;
-        let mut cont = false;
-        loop {
-            if self.to_send.is_empty() {
-                break;
-            }
-            match self.ctrl.poll_ready_unpin(cx) {
-                Poll::Pending => break,
-                Poll::Ready(rdy) => rdy.map_err(CoordChanError::SinkReady),
-            }?;
-            self.ctrl
-                // unwrap is safe: checked len above
-                .start_send_unpin(self.to_send.pop_front().unwrap())
-                .map_err(CoordChanError::SinkSend)?;
-            sent += 1;
-            if sent >= MAX_LOOPS {
-                cont = !self.to_send.is_empty();
-                break;
-            }
-        }
-        self.flushing = match self.ctrl.poll_flush_unpin(cx) {
-            Poll::Pending => Ok(true),
-            Poll::Ready(Ok(())) => Ok(false),
-            Poll::Ready(Err(e)) => Err(CoordChanError::SinkFlush(e)),
-        }?;
-        Ok(cont)
+        util::drive_ctrl_send(cx, &mut self.flushing, &mut self.ctrl, &mut self.to_send)
+            .map_err(CoordChanError::Sink)
     }
 }
 

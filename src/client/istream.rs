@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 
-pub type ConnectingInStream = oneshot::Receiver<(String, usize, InStream)>;
+pub type ConnectingInStream = oneshot::Receiver<(String, u32, InStream)>;
 
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
@@ -53,7 +53,7 @@ impl IncomingStreamsInner {
             tokio::spawn(async move {
                 let mut read_stream = SymmetricallyFramed::new(
                     FramedRead::new(recv, LengthDelimitedCodec::new()),
-                    SymmetricalBincode::<(String, usize)>::default(),
+                    SymmetricalBincode::<(String, u32)>::default(),
                 );
                 let (peer, chanid) = read_stream.try_next().await.unwrap().unwrap();
                 let instream = InStream::from_framed(read_stream.into_inner());

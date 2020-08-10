@@ -33,6 +33,8 @@ fn test_simple() {
 
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
+        assert!(Client::new(client_cfg.clone()).await.is_err());
+        assert_eq!(coord.num_clients(), 1);
         drop(client);
         time::delay_for(Duration::from_millis(20)).await;
         assert_eq!(coord.num_clients(), 0);

@@ -103,7 +103,7 @@ impl CoordInner {
                         println!("err: {}", e);
                     }
                     Accepted(conn, ctrl, iuni, peer) => {
-                        if self.clients.get(&peer[..]).is_some() {
+                        if self.clients.get(&peer).is_some() {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
                                 println!("error: name '{}' already in use", peer);
