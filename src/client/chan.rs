@@ -37,14 +37,14 @@ pub enum ClientChanError {
     StreamPoll(#[error(source, no_from)] io::Error),
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
-    #[error(display = "New stream peer:sid must be unique")]
+    #[error(display = "New stream sid must be unique")]
     StreamNameInUse,
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
-    #[error(display = "Coord response about nonexistent channel {}:{}", _0, _1)]
-    NonexistentStream(String, u32),
-    #[error(display = "Coord response about stale channel {}:{}", _0, _1)]
-    StaleStream(String, u32),
+    #[error(display = "Coord response about nonexistent strmid {}", _0)]
+    NonexistentStream(u32),
+    #[error(display = "Coord response about stale strmid {}", _0)]
+    StaleStream(u32),
     #[error(display = "Incoming driver hung up")]
     IncomingDriverHup,
 }
@@ -52,7 +52,6 @@ pub enum ClientChanError {
 pub(super) struct ClientChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
-    id: String,
     incs_bye_in: oneshot::Receiver<()>,
     incs_bye_out: Option<oneshot::Sender<()>>,
     ref_count: usize,
@@ -78,73 +77,67 @@ impl ClientChanInner {
         Ok(false)
     }
 
-    fn get_new_stream(
-        &mut self,
-        sid: u32,
-        peer: &str,
-    ) -> Result<ConnectingOutStreamHandle, ClientChanError> {
+    fn get_new_stream(&mut self, sid: u32) -> Result<ConnectingOutStreamHandle, ClientChanError> {
         if let Some(chan) = self.new_streams.get_mut(&sid) {
             if let Some(chan) = chan.take() {
                 Ok(chan)
             } else {
-                Err(ClientChanError::StaleStream(peer.to_string(), sid))
+                Err(ClientChanError::StaleStream(sid))
             }
         } else {
-            Err(ClientChanError::NonexistentStream(peer.to_string(), sid))
+            Err(ClientChanError::NonexistentStream(sid))
         }
     }
 
     fn drive_ctrl_recv(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
         let mut recvd = 0;
         loop {
-            use ClientChanError::*;
-            use ControlMsg::*;
-            match self.ctrl.poll_next_unpin(cx) {
+            let msg = match self.ctrl.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => Err(PeerClosed),
-                Poll::Ready(Some(Err(e))) => Err(StreamPoll(e)),
-                Poll::Ready(Some(Ok(msg))) => match msg {
-                    NewStreamOk(peer, sid) => {
-                        let chan = self.get_new_stream(sid, &peer)?;
-                        let client_id = self.id.clone();
-                        let uni = self.conn.open_uni();
-                        tokio::spawn(async move {
-                            // get the unidirectional channel
-                            let send = match uni.await {
-                                Ok(send) => send,
-                                Err(e) => {
-                                    chan.send(Err(OutStreamError::OpenUni(e))).ok();
-                                    return;
-                                }
-                            };
-
-                            // write our name and channel id to it
-                            let mut write_stream = SymmetricallyFramed::new(
-                                FramedWrite::new(send, LengthDelimitedCodec::new()),
-                                SymmetricalBincode::<(String, u32)>::default(),
-                            );
-                            if let Err(e) = write_stream.send((client_id, sid)).await {
-                                chan.send(Err(OutStreamError::InitMsg(e))).ok();
+                Poll::Ready(None) => Err(ClientChanError::PeerClosed),
+                Poll::Ready(Some(Err(e))) => Err(ClientChanError::StreamPoll(e)),
+                Poll::Ready(Some(Ok(msg))) => Ok(msg),
+            }?;
+            match msg {
+                ControlMsg::NewStreamOk(sid) => {
+                    let chan = self.get_new_stream(sid)?;
+                    let uni = self.conn.open_uni();
+                    tokio::spawn(async move {
+                        // get the unidirectional stream
+                        let send = match uni.await {
+                            Ok(send) => send,
+                            Err(e) => {
+                                chan.send(Err(OutStreamError::OpenUni(e))).ok();
                                 return;
                             }
-                            if let Err(e) = write_stream.flush().await {
-                                chan.send(Err(OutStreamError::Flush(e))).ok();
-                                return;
-                            };
+                        };
 
-                            // send resulting OutStream to the receiver
-                            let outstream = OutStream::from_framed(write_stream.into_inner());
-                            chan.send(Ok(outstream)).ok();
-                        });
-                        Ok(())
-                    }
-                    NewStreamErr(peer, sid) => {
-                        let chan = self.get_new_stream(sid, &peer)?;
-                        chan.send(Err(OutStreamError::Coord)).ok();
-                        Ok(())
-                    }
-                    _ => Err(WrongMessage(msg)),
-                },
+                        // write sid to it
+                        let mut write_stream = SymmetricallyFramed::new(
+                            FramedWrite::new(send, LengthDelimitedCodec::new()),
+                            SymmetricalBincode::<u32>::default(),
+                        );
+                        if let Err(e) = write_stream.send(sid).await {
+                            chan.send(Err(OutStreamError::InitMsg(e))).ok();
+                            return;
+                        }
+                        if let Err(e) = write_stream.flush().await {
+                            chan.send(Err(OutStreamError::Flush(e))).ok();
+                            return;
+                        };
+
+                        // send resulting OutStream to the receiver
+                        let outstream = OutStream::from_framed(write_stream.into_inner());
+                        chan.send(Ok(outstream)).ok();
+                    });
+                    Ok(())
+                }
+                ControlMsg::NewStreamErr(sid) => {
+                    let chan = self.get_new_stream(sid)?;
+                    chan.send(Err(OutStreamError::Coord)).ok();
+                    Ok(())
+                }
+                _ => Err(ClientChanError::WrongMessage(msg)),
             }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -195,7 +188,6 @@ impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
-        id: String,
     ) -> (Self, oneshot::Sender<()>, oneshot::Receiver<()>) {
         let (i_client, incs_bye_in) = oneshot::channel();
         let (incs_bye_out, i_bye) = oneshot::channel();
@@ -203,7 +195,6 @@ impl ClientChanRef {
             Self(Arc::new(Mutex::new(ClientChanInner {
                 conn,
                 ctrl,
-                id,
                 incs_bye_in,
                 incs_bye_out: Some(incs_bye_out),
                 ref_count: 0,
@@ -269,18 +260,17 @@ impl ClientChan {
         to: String,
         sid: u32,
     ) -> Result<ConnectingOutStream, ClientChanError> {
-        // the new stream future is a channel that will contain the resulting channel
+        // the new stream future is a channel that will contain the resulting stream
         let (sender, receiver) = oneshot::channel();
         let inner = &mut *self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
-        let new_stream_req = ControlMsg::NewStreamReq(to, sid);
         if inner.new_streams.get(&sid).is_some() {
             return Err(ClientChanError::StreamNameInUse);
         }
 
         // send the coordinator a request and record the send side of the channel
-        inner.to_send.push_back(new_stream_req);
+        inner.to_send.push_back(ControlMsg::NewStreamReq(to, sid));
         inner.new_streams.insert(sid, Some(sender));
 
         // make sure the driver wakes up

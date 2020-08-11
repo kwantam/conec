@@ -3,7 +3,7 @@ pub(crate) mod config;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
-use chan::{CoordChan, CoordChanDriver, CoordChanRef};
+use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
 use config::CoordConfig;
 
 use err_derive::Error;
@@ -11,7 +11,7 @@ use futures::channel::mpsc;
 use futures::prelude::*;
 use quinn::{
     crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
-    IncomingUniStreams, ServerConfigBuilder,
+    IncomingUniStreams, SendStream, ServerConfigBuilder,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -36,6 +36,8 @@ enum CoordEvent {
     Accepted(ConecConn, CtrlStream, IncomingUniStreams, String),
     AcceptError(CoordError),
     ChanClose(String),
+    NewStreamReq(String, String, u32),
+    NewStreamRes(String, u32, Result<SendStream, ConnectionError>),
 }
 
 struct CoordInner {
@@ -93,8 +95,9 @@ impl CoordInner {
     }
 
     /// handle events arriving on self.events
-    fn handle_events(&mut self, cx: &mut Context) {
+    fn handle_events(&mut self, cx: &mut Context) -> bool {
         use CoordEvent::*;
+        let mut accepted = 0;
         loop {
             match self.events.poll_next_unpin(cx) {
                 Poll::Ready(Some(event)) => match event {
@@ -115,7 +118,7 @@ impl CoordInner {
                                 drop(conn);
                             });
                         } else {
-                            let inner = CoordChanRef::new(
+                            let (inner, sender) = CoordChanRef::new(
                                 conn,
                                 ctrl,
                                 iuni,
@@ -127,18 +130,41 @@ impl CoordInner {
                             let driver = CoordChanDriver(inner.clone());
                             tokio::spawn(async move { driver.await });
 
-                            self.clients.insert(peer, CoordChan(inner));
+                            self.clients.insert(peer, CoordChan { inner, sender });
                         }
                     }
                     ChanClose(client) => {
                         // client channel closed --- drop it from the queue
                         self.clients.remove(&client);
                     }
+                    NewStreamReq(from, to, sid) => {
+                        if let Some(c_to) = self.clients.get(&to) {
+                            c_to.send(CoordChanEvent::NSReq(from, sid));
+                        } else if let Some(c_from) = self.clients.get(&from) {
+                            c_from.send(CoordChanEvent::NSErr(sid));
+                        } else {
+                            // XXX what do we do if c_to and c_from are both gone? log?
+                            println!("NSReq clients disappeared: {}:{} -> {}", from, sid, to);
+                        }
+                    }
+                    NewStreamRes(to, sid, result) => {
+                        if let Some(c_to) = self.clients.get(&to) {
+                            c_to.send(CoordChanEvent::NSRes(sid, result));
+                        } else {
+                            // XXX what do we do if c_to is gone?
+                            println!("NSRes client disappeared: {}:{}", to, sid);
+                        }
+                    }
                 },
                 Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
                 Poll::Pending => break,
             }
+            accepted += 1;
+            if accepted >= MAX_LOOPS {
+                return true;
+            }
         }
+        false
     }
 }
 
@@ -207,7 +233,7 @@ impl Future for CoordDriver {
         loop {
             let mut keep_going = false;
             keep_going |= inner.drive_accept(cx)?;
-            inner.handle_events(cx);
+            keep_going |= inner.handle_events(cx);
             if !keep_going {
                 break;
             }

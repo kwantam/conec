@@ -54,12 +54,12 @@ impl Client {
 
         // set up the control stream with the coordinator
         let ctrl = conn
-            .accept_ctrl(config.id.clone())
+            .accept_ctrl(config.id)
             .await
             .map_err(ClientError::AcceptCtrl)?;
 
         // set up the client-coordinator channel and spawn its driver
-        let (inner, i_client, i_bye) = ClientChanRef::new(conn, ctrl, config.id);
+        let (inner, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
         let driver = ClientChanDriver(inner.clone());
         tokio::spawn(async move { driver.await });
         let coord = ClientChan(inner);

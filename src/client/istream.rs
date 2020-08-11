@@ -47,7 +47,7 @@ pub(super) struct IncomingStreamsInner {
 }
 
 impl IncomingStreamsInner {
-    fn handle_events(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
+    fn drive_streams_recv(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
         match self.bye.poll_unpin(cx) {
             Poll::Pending => Ok(()),
             _ => Err(IncomingStreamsError::ClientClosed),
@@ -158,7 +158,7 @@ impl Future for IncomingStreamsDriver {
             _ => inner.driver = Some(cx.waker().clone()),
         };
         loop {
-            if !inner.handle_events(cx)? {
+            if !inner.drive_streams_recv(cx)? {
                 break;
             }
         }

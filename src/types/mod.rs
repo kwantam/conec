@@ -6,6 +6,7 @@ pub(crate) use conn::ConecConn;
 pub use conn::ConecConnError;
 pub(crate) use ctrlstream::CtrlStream;
 pub use ctrlstream::CtrlStreamError;
+pub(crate) use iostream::FramedRecvStream;
 pub use iostream::{InOutStream, InStream, OutStream};
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,6 @@ pub enum ControlMsg {
     ClHello(String, String),
     HelloError(String),
     NewStreamReq(String, u32),
-    NewStreamOk(String, u32),
-    NewStreamErr(String, u32),
+    NewStreamOk(u32),
+    NewStreamErr(u32),
 }

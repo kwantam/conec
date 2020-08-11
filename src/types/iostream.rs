@@ -6,8 +6,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-pub type FramedRecvStream = FramedRead<RecvStream, LengthDelimitedCodec>;
-pub type FramedSendStream = FramedWrite<SendStream, LengthDelimitedCodec>;
+pub(crate) type FramedRecvStream = FramedRead<RecvStream, LengthDelimitedCodec>;
+pub(crate) type FramedSendStream = FramedWrite<SendStream, LengthDelimitedCodec>;
 
 pub struct InStream {
     s_recv: FramedRecvStream,
