@@ -80,6 +80,7 @@ channel a separate QUIC connection directly to the other endpoint.
     - [x] Client connection: switch handshake order, detect dup-id earlier
     - [x] proxied streams through coordinator
 - future features and improvements
+    - [ ] for Client futures: `map(|x| x.map_err(FooError))` to get rid of multiple unwraps
     - [ ] switch from String to Bytes where possible to reduce copying
     - [ ] direct Client-to-Client channels
     - [ ] NAT detection / traversal
