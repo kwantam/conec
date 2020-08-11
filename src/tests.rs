@@ -177,6 +177,7 @@ fn test_stream_loopback() {
         println!("{}:{} sent '{:?}' (expected: '{:?}')", sender, strmid, rec, to_send);
     });
 }
+
 fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {
     let dir = directories_next::ProjectDirs::from("am.kwant", "conec", "conec-tests").unwrap();
     let path = dir.data_local_dir();

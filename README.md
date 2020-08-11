@@ -77,14 +77,15 @@ channel a separate QUIC connection directly to the other endpoint.
     - [x] switch to ConecError
 - basic functionality
     - [x] per-channel driver @ Coord
-    - [x] Client driver - what is the API for this? one driver for whole client?
     - [x] Client connection: switch handshake order, detect dup-id earlier
-    - [ ] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg
-    - [ ] proxied streams through coordinator - ProxStream driver
-- future features
+    - [x] proxied streams through coordinator
+- future features and improvements
+    - [ ] switch from String to Bytes where possible to reduce copying
     - [ ] direct Client-to-Client channels
     - [ ] NAT detection / traversal
     - [ ] Client authentication and naming via pubkeys
 - questions / maybes
+    - [x] Client driver - what is the API for this? one driver for whole client?
+    - [ ] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg?
     - [ ] better Client naming (Coord assigns? etc.)
     - [ ] Client <-> Coord streams? pseudoclient? alt: just spin up a Client
