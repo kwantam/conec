@@ -168,14 +168,13 @@ impl CoordChanInner {
                 );
                 let sid = match read_stream.try_next().await {
                     Err(e) => {
-                        // XXX nothing we can do with this error!
-                        println!("drive_iuni_recv: {:?}", e);
+                        tracing::warn!("drive_iuni_recv: {:?}", e);
                         return;
                     }
                     Ok(msg) => match msg {
                         Some(sid) => sid,
                         None => {
-                            println!("drive_iuni_recv: unexpected end of stream");
+                            tracing::warn!("drive_iuni_recv: unexpected end of stream");
                             return;
                         }
                     },

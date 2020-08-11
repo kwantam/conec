@@ -102,14 +102,12 @@ impl CoordInner {
             match self.events.poll_next_unpin(cx) {
                 Poll::Ready(Some(event)) => match event {
                     AcceptError(e) => {
-                        // XXX what do we do here?
-                        println!("err: {}", e);
+                        tracing::warn!("got AcceptError: {}", e);
                     }
                     Accepted(conn, ctrl, iuni, peer) => {
                         if self.clients.get(&peer).is_some() {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
-                                println!("error: name '{}' already in use", peer);
                                 ctrl.send(ControlMsg::HelloError("name in use".to_string()))
                                     .await
                                     .ok();
@@ -143,16 +141,14 @@ impl CoordInner {
                         } else if let Some(c_from) = self.clients.get(&from) {
                             c_from.send(CoordChanEvent::NSErr(sid));
                         } else {
-                            // XXX what do we do if c_to and c_from are both gone? log?
-                            println!("NSReq clients disappeared: {}:{} -> {}", from, sid, to);
+                            tracing::warn!("NSReq clients disappeared: {}:{} -> {}", from, sid, to);
                         }
                     }
                     NewStreamRes(to, sid, result) => {
                         if let Some(c_to) = self.clients.get(&to) {
                             c_to.send(CoordChanEvent::NSRes(sid, result));
                         } else {
-                            // XXX what do we do if c_to is gone?
-                            println!("NSRes client disappeared: {}:{}", to, sid);
+                            tracing::warn!("NSRes client disappeared: {}:{}", to, sid);
                         }
                     }
                 },
