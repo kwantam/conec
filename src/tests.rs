@@ -125,7 +125,12 @@ fn test_stream_uni() {
         assert_eq!(coord.num_clients(), 2);
 
         // open stream to client2
-        let mut s12 = client1.new_stream("client2".to_string(), 0).unwrap().await.unwrap().unwrap();
+        let mut s12 = client1
+            .new_stream("client2".to_string(), 0)
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
         // receive stream at client2
         let (sender, strmid, mut r12) = inc2.next().await.unwrap().await.unwrap().unwrap();
 
@@ -133,7 +138,10 @@ fn test_stream_uni() {
         s12.send(to_send.clone()).await.unwrap();
         let rec = r12.try_next().await.unwrap().unwrap();
         assert_eq!(to_send, rec);
-        println!("{}:{} sent '{:?}' (expected: '{:?}')", sender, strmid, rec, to_send);
+        println!(
+            "{}:{} sent '{:?}' (expected: '{:?}')",
+            sender, strmid, rec, to_send
+        );
     });
 }
 
@@ -166,7 +174,12 @@ fn test_stream_loopback() {
         assert_eq!(coord.num_clients(), 1);
 
         // open stream to client1
-        let mut s11 = client.new_stream("client1".to_string(), 0).unwrap().await.unwrap().unwrap();
+        let mut s11 = client
+            .new_stream("client1".to_string(), 0)
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
         // receive stream at client1
         let (sender, strmid, mut r11) = inc.next().await.unwrap().await.unwrap().unwrap();
 
@@ -174,7 +187,10 @@ fn test_stream_loopback() {
         s11.send(to_send.clone()).await.unwrap();
         let rec = r11.try_next().await.unwrap().unwrap();
         assert_eq!(to_send, rec);
-        println!("{}:{} sent '{:?}' (expected: '{:?}')", sender, strmid, rec, to_send);
+        println!(
+            "{}:{} sent '{:?}' (expected: '{:?}')",
+            sender, strmid, rec, to_send
+        );
     });
 }
 
