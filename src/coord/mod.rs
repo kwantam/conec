@@ -62,7 +62,6 @@ enum CoordEvent {
 }
 
 struct CoordInner {
-    _endpoint: Endpoint,
     incoming: Incoming,
     certs: CertificateChain,
     clients: HashMap<String, CoordChan>,
@@ -189,10 +188,9 @@ impl CoordInner {
 struct CoordRef(Arc<Mutex<CoordInner>>);
 
 impl CoordRef {
-    fn new(endpoint: Endpoint, incoming: Incoming, certs: CertificateChain) -> Self {
+    fn new(incoming: Incoming, certs: CertificateChain) -> Self {
         let (sender, events) = mpsc::unbounded();
         Self(Arc::new(Mutex::new(CoordInner {
-            _endpoint: endpoint,
             incoming,
             certs,
             clients: HashMap::new(),
@@ -266,7 +264,10 @@ impl Future for CoordDriver {
 ///! Main coordinator object
 ///
 /// See [library documentation](../index.html) for an example of constructing a Coord.
-pub struct Coord(CoordRef);
+pub struct Coord {
+    endpoint: Endpoint,
+    inner: CoordRef,
+}
 
 impl Coord {
     ///! Construct a new coordinator and listen for Clients
@@ -285,16 +286,21 @@ impl Coord {
         endpoint.listen(qsc.build());
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        let inner = CoordRef::new(endpoint, incoming, config.cert);
+        let inner = CoordRef::new(incoming, config.cert);
         let driver = CoordDriver(inner.clone());
         tokio::spawn(async move { driver.await });
 
-        Ok(Self(inner))
+        Ok(Self { endpoint, inner })
     }
 
     ///! Report number of connected clients
     pub fn num_clients(&self) -> usize {
-        let inner = self.0.lock().unwrap();
+        let inner = self.inner.lock().unwrap();
         inner.clients.len()
+    }
+
+    ///! Return the local address that Coord is bound to
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.endpoint.local_addr()
     }
 }

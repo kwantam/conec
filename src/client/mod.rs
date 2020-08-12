@@ -51,7 +51,7 @@ pub enum ClientError {
 ///
 /// See [library documentation](../index.html) for an example of constructing a Client.
 pub struct Client {
-    _endpoint: Endpoint,
+    endpoint: Endpoint,
     coord: ClientChan,
 }
 
@@ -97,11 +97,16 @@ impl Client {
             IncomingStreams(inner)
         };
 
-        Ok((Self { _endpoint: endpoint, coord }, istrms))
+        Ok((Self { endpoint, coord }, istrms))
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator
     pub fn new_stream(&self, to: String, cid: u32) -> Result<ConnectingOutStream, ClientChanError> {
         self.coord.new_stream(to, cid)
+    }
+
+    ///! Return the local address that Client is bound to
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.endpoint.local_addr()
     }
 }
