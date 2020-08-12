@@ -19,11 +19,27 @@ pub enum InStreamError {
     StreamRead(#[source] io::Error),
     #[error(display = "Deserializing InitMsg")]
     InitMsg,
+    #[error(display = "Incoming connection canceled: {:?}", _0)]
+    Canceled(#[source] oneshot::Canceled),
 }
 
 pub type NewInStream = (String, u32, InStream);
 
-pub type ConnectingInStream = oneshot::Receiver<Result<NewInStream, InStreamError>>;
+pub struct ConnectingInStream(oneshot::Receiver<Result<NewInStream, InStreamError>>);
+
+impl Future for ConnectingInStream {
+    type Output = Result<NewInStream, InStreamError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let inner = &mut self.0;
+        match inner.poll_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(InStreamError::Canceled(e))),
+            Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e)),
+            Poll::Ready(Ok(Ok(i))) => Poll::Ready(Ok(i)),
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
@@ -82,7 +98,7 @@ impl IncomingStreamsInner {
                 let instream = InStream::from_framed(read_stream.into_inner());
                 sender.send(Ok((peer, chanid, instream))).ok();
             });
-            self.incoming.push_back(receiver);
+            self.incoming.push_back(ConnectingInStream(receiver));
             if let Some(task) = self.incoming_reader.take() {
                 task.wake();
             }

@@ -1,7 +1,7 @@
 use crate::{Client, ClientConfig, Coord, CoordConfig};
 
 use anyhow::Context;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::prelude::*;
 use quinn::Certificate;
 use std::path::PathBuf;
@@ -129,20 +129,20 @@ fn test_stream_uni() {
             .new_stream("client2".to_string(), 0)
             .unwrap()
             .await
-            .unwrap()
             .unwrap();
         // receive stream at client2
-        let (sender, strmid, mut r12) = inc2.next().await.unwrap().await.unwrap().unwrap();
+        let (sender, strmid, mut r12) = inc2.next().await.unwrap().await.unwrap();
 
         let to_send = Bytes::from("asdf");
         s12.send(to_send.clone()).await.unwrap();
-        let rec = r12.try_next().await.unwrap().unwrap();
+        let rec = r12.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
         println!(
             "{}:{} sent '{:?}' (expected: '{:?}')",
             sender, strmid, rec, to_send
         );
-    });
+        Ok(()) as Result<(), std::io::Error>
+    }).ok();
 }
 
 #[test]
@@ -178,20 +178,20 @@ fn test_stream_loopback() {
             .new_stream("client1".to_string(), 0)
             .unwrap()
             .await
-            .unwrap()
             .unwrap();
         // receive stream at client1
-        let (sender, strmid, mut r11) = inc.next().await.unwrap().await.unwrap().unwrap();
+        let (sender, strmid, mut r11) = inc.next().await.unwrap().await.unwrap();
 
         let to_send = Bytes::from("loopback stream");
         s11.send(to_send.clone()).await.unwrap();
-        let rec = r11.try_next().await.unwrap().unwrap();
+        let rec = r11.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
         println!(
             "{}:{} sent '{:?}' (expected: '{:?}')",
             sender, strmid, rec, to_send
         );
-    });
+        Ok(()) as Result<(), std::io::Error>
+    }).ok();
 }
 
 fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {

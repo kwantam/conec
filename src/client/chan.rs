@@ -24,10 +24,26 @@ pub enum OutStreamError {
     Flush(#[error(source, no_from)] io::Error),
     #[error(display = "Opening unidirectional channel: {:?}", _0)]
     OpenUni(#[source] ConnectionError),
+    #[error(display = "Outgoing connection canceled: {:?}", _0)]
+    Canceled(#[source] oneshot::Canceled),
 }
 
-pub type ConnectingOutStream = oneshot::Receiver<Result<OutStream, OutStreamError>>;
 type ConnectingOutStreamHandle = oneshot::Sender<Result<OutStream, OutStreamError>>;
+pub struct ConnectingOutStream(oneshot::Receiver<Result<OutStream, OutStreamError>>);
+
+impl Future for ConnectingOutStream {
+    type Output = Result<OutStream, OutStreamError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let inner = &mut self.0;
+        match inner.poll_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
+            Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e)),
+            Poll::Ready(Ok(Ok(o))) => Poll::Ready(Ok(o)),
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ClientChanError {
@@ -276,6 +292,6 @@ impl ClientChan {
         // make sure the driver wakes up
         inner.wake();
 
-        Ok(receiver)
+        Ok(ConnectingOutStream(receiver))
     }
 }
