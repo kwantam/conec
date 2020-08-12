@@ -1,3 +1,12 @@
+// Copyright 2020 Riad S. Wahby <rsw@cs.stanford.edu>
+//
+// This file is part of conec.
+//
+// Licensed under the Apache License, Version 2.0 (see
+// LICENSE or https://www.apache.org/licenses/LICENSE-2.0).
+// This file may not be copied, modified, or distributed
+// except according to those terms.
+
 mod conn;
 mod ctrlstream;
 mod iostream;
@@ -11,9 +20,6 @@ pub use iostream::{InOutStream, InStream, OutStream};
 
 use serde::{Deserialize, Serialize};
 
-// messages starting with "Co" are sent by Coordinator
-// messages starting with "Cl" are sent by Client
-// others can be sent by either
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ControlMsg {
     CoNonce(String),
