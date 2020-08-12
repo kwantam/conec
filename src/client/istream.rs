@@ -114,7 +114,7 @@ impl IncomingStreamsInner {
                         }
                     },
                 };
-                let instream = InStream::from_framed(read_stream.into_inner());
+                let instream = read_stream.into_inner();
                 sender.send(Ok((peer, chanid, instream))).ok();
             });
             self.incoming.push_back(ConnectingInStream(receiver));

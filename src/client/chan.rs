@@ -169,7 +169,7 @@ impl ClientChanInner {
                         };
 
                         // send resulting OutStream to the receiver
-                        let outstream = OutStream::from_framed(write_stream.into_inner());
+                        let outstream = write_stream.into_inner();
                         chan.send(Ok(outstream)).ok();
                     });
                     Ok(())

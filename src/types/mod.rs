@@ -7,16 +7,24 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Common types
+
 mod conn;
 mod ctrlstream;
-mod iostream;
 
 pub(crate) use conn::ConecConn;
 pub use conn::ConecConnError;
 pub(crate) use ctrlstream::CtrlStream;
 pub use ctrlstream::CtrlStreamError;
-pub(crate) use iostream::FramedRecvStream;
-pub use iostream::{InStream, OutStream};
+
+use quinn::{RecvStream, SendStream};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+///! Receiving end of a data stream: a [Stream](futures::stream::Stream) of [BytesMut](bytes::BytesMut).
+pub type InStream = FramedRead<RecvStream, LengthDelimitedCodec>;
+
+///! Sending end of a data stream that accepts [Bytes](bytes::Bytes).
+pub type OutStream = FramedWrite<SendStream, LengthDelimitedCodec>;
 
 use serde::{Deserialize, Serialize};
 

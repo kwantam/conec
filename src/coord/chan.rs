@@ -9,7 +9,7 @@
 
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, FramedRecvStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream};
 use crate::util;
 
 use err_derive::Error;
@@ -70,7 +70,7 @@ pub(super) enum CoordChanEvent {
     NSErr(u32),
     NSReq(String, u32),
     NSRes(u32, Result<SendStream, ConnectionError>),
-    IUni(u32, FramedRecvStream),
+    IUni(u32, InStream),
 }
 
 impl CoordChanInner {

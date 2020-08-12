@@ -120,6 +120,7 @@ mod tests;
 
 pub use client::{config::ClientConfig, Client};
 pub use coord::{config::CoordConfig, Coord};
+pub use types::{InStream, OutStream};
 
 mod consts {
     pub(crate) const DFLT_PORT: u16 = 1719;

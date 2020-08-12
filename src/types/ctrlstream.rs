@@ -7,8 +7,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::iostream::{FramedRecvStream, FramedSendStream};
-use super::ControlMsg;
+use super::{ControlMsg, InStream, OutStream};
 use crate::consts::VERSION;
 
 use err_derive::Error;
@@ -51,9 +50,9 @@ pub enum CtrlStreamError {
 }
 
 type CtrlRecvStream =
-    SymmetricallyFramed<FramedRecvStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
+    SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
 type CtrlSendStream =
-    SymmetricallyFramed<FramedSendStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
+    SymmetricallyFramed<OutStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
 
 pub(crate) struct CtrlStream {
     s_send: CtrlSendStream,
