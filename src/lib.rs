@@ -37,7 +37,7 @@ in constructing Client-to-Client channels, including NAT traversal.)
 A conec instance requires a Coordinator with a TLS certificate for its
 hostname and an IP address that Clients can reach. It is possible to use
 a self-signed certificate (generated, say, by [rcgen](https://docs.rs/rcgen/))
-as long as the Clients trust it; see below.
+as long as the Clients trust it; see [ClientConfig::set_ca].
 
 ## Coordinator
 
