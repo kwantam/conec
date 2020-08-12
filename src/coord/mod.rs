@@ -7,6 +7,12 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+/*!
+This module defines the Coordinator entity and associated functionality.
+
+See [library documentation](../index.html) for more info on how to instantiate a Coordinator.
+*/
+
 mod chan;
 pub(crate) mod config;
 
@@ -27,16 +33,22 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+///! Coordinator constructor and driver errors
 #[derive(Debug, Error)]
 pub enum CoordError {
+    ///! Transport's incoming connections stream ended
     #[error(display = "Unexpected end of Incoming stream")]
     EndOfIncomingStream,
+    ///! Error accepting new connection
     #[error(display = "Connection error: {:?}", _0)]
     Connect(#[source] ConnectionError),
+    ///! Error connecting control channel to new Client
     #[error(display = "Error connecting control channel: {:?}", _0)]
     Control(#[source] ConecConnError),
+    ///! Error setting up certificate chain
     #[error(display = "Certificate: {:?}", _0)]
     Certificate(#[source] TLSError),
+    ///! Error binding port for transport
     #[error(display = "Binding port: {:?}", _0)]
     Bind(#[source] EndpointError),
 }
@@ -251,10 +263,13 @@ impl Future for CoordDriver {
     }
 }
 
+///! Main coordinator object
+///
+/// See [library documentation](../index.html) for an example of constructing a Coord.
 pub struct Coord(CoordRef);
 
 impl Coord {
-    /// construct a new coord
+    ///! Construct a new coordinator and listen for Clients
     pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
         // build configuration
         let mut qsc = ServerConfigBuilder::default();
@@ -277,6 +292,7 @@ impl Coord {
         Ok(Self(inner))
     }
 
+    ///! Report number of connected clients
     pub fn num_clients(&self) -> usize {
         let inner = self.0.lock().unwrap();
         inner.clients.len()

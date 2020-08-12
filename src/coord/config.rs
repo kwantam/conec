@@ -16,14 +16,20 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+///! Errors when constructing a new coordinator configuration
 #[derive(Debug, Error)]
 pub enum CoordConfigError {
+    ///! Failed to read certificate or key file
     #[error(display = "Reading certificate or key file: {:?}", _0)]
     ReadingCertOrKey(#[source] io::Error),
+    ///! Failed to parse certificate or key
     #[error(display = "Parsing certificate or key: {:?}", _0)]
     ParsingCertOrKey(#[source] ParseError),
 }
 
+///! Coordinator configuration struct
+///
+/// See [library documentation](index.html) for usage example.
 #[derive(Clone, Debug)]
 pub struct CoordConfig {
     pub(super) laddr: SocketAddr,
@@ -34,6 +40,10 @@ pub struct CoordConfig {
 }
 
 impl CoordConfig {
+    ///! Construct a new coordinator configuration
+    ///
+    /// - `cert_path` is the path to a certificate in PEM or DER format
+    /// - `key_path` is the path to the corresponding key in PEM or DER format
     pub fn new(cert_path: PathBuf, key_path: PathBuf) -> Result<Self, CoordConfigError> {
         let key = {
             let tmp = fs_read(&key_path)?;
@@ -60,23 +70,35 @@ impl CoordConfig {
         })
     }
 
+    ///! Set listen port number to `port`
     pub fn set_port(&mut self, port: u16) -> &mut Self {
         self.laddr.set_port(port);
         self
     }
 
+    ///! Set listen address to `ip`
+    ///
+    /// By default, the listen address is set to `0.0.0.0:0`. To bind to a host-assigned
+    /// IPv6 port instead, one might call
+    ///
+    /// ```ignore
+    /// coord_cfg.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+    /// ```
     pub fn set_ip(&mut self, ip: IpAddr) -> &mut Self {
         self.laddr.set_ip(ip);
         self
     }
 
-    // log master secret to ENV{SSLKEYLOGFILE}
+    ///! Enable logging key material to the file specified by the environment variable `SSLKEYLOGFILE`.
     pub fn enable_keylog(&mut self) -> &mut Self {
         self.keylog = true;
         self
     }
 
-    // Per QUIC spec, stateless retry defends against client address spoofing.
+    ///! Enable QUIC stateless retry.
+    ///
+    /// Per QUIC spec, stateless retry defends against client address spoofing.
+    /// The downside is that this adds another round-trip to new connections.
     pub fn enable_stateless_retry(&mut self) -> &mut Self {
         self.stateless_retry = true;
         self

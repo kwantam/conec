@@ -23,21 +23,29 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedWrite, LengthDelimitedCodec};
 
+///! Error variant output by [ConnectingOutStream] future
 #[derive(Debug, Error)]
 pub enum OutStreamError {
+    ///! Coordinator sent us an error
     #[error(display = "Coordinator responded with error")]
     Coord,
+    ///! Failed to send initial message
     #[error(display = "Sending initial message: {:?}", _0)]
     InitMsg(#[error(source, no_from)] io::Error),
+    ///! Failed to flush initial message
     #[error(display = "Flushing init message: {:?}", _0)]
     Flush(#[error(source, no_from)] io::Error),
+    ///! Failed to open unidirectional channel
     #[error(display = "Opening unidirectional channel: {:?}", _0)]
     OpenUni(#[source] ConnectionError),
+    ///! Opening channel was canceled
     #[error(display = "Outgoing connection canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
 }
 
 type ConnectingOutStreamHandle = oneshot::Sender<Result<OutStream, OutStreamError>>;
+
+///! An outgoing stream that is currently connecting
 pub struct ConnectingOutStream(oneshot::Receiver<Result<OutStream, OutStreamError>>);
 
 impl Future for ConnectingOutStream {
@@ -54,22 +62,31 @@ impl Future for ConnectingOutStream {
     }
 }
 
+///! Client channel driver errors
 #[derive(Debug, Error)]
 pub enum ClientChanError {
+    ///! Peer closed connection
     #[error(display = "Peer closed connection")]
     PeerClosed,
+    ///! Polling the control channel failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
+    ///! Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
+    ///! Specified stream id was not unique
     #[error(display = "New stream sid must be unique")]
     StreamNameInUse,
+    ///! Coordinator sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
+    ///! Coordinator sent us a message about a nonexistent stream-id
     #[error(display = "Coord response about nonexistent strmid {}", _0)]
     NonexistentStream(u32),
+    ///! Coordinator sent us a message about a stale stream-id
     #[error(display = "Coord response about stale strmid {}", _0)]
     StaleStream(u32),
+    ///! Incoming stream driver died
     #[error(display = "Incoming driver hung up")]
     IncomingDriverHup,
 }

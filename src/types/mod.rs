@@ -16,7 +16,7 @@ pub use conn::ConecConnError;
 pub(crate) use ctrlstream::CtrlStream;
 pub use ctrlstream::CtrlStreamError;
 pub(crate) use iostream::FramedRecvStream;
-pub use iostream::{InOutStream, InStream, OutStream};
+pub use iostream::{InStream, OutStream};
 
 use serde::{Deserialize, Serialize};
 

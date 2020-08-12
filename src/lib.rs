@@ -6,6 +6,7 @@
 // LICENSE or https://www.apache.org/licenses/LICENSE-2.0).
 // This file may not be copied, modified, or distributed
 // except according to those terms.
+#![deny(missing_docs)]
 
 /*!
 COordinated NEtwork Channels: a network abstraction for communication
@@ -111,10 +112,11 @@ let rec = from_me
 
 pub mod client;
 pub mod coord;
+mod types;
+mod util;
+
 #[cfg(test)]
 mod tests;
-pub mod types;
-mod util;
 
 pub use client::{config::ClientConfig, Client};
 pub use coord::{config::CoordConfig, Coord};

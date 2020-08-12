@@ -24,20 +24,28 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
+///! Coordinator channel driver errors
 #[derive(Debug, Error)]
 pub enum CoordChanError {
+    ///! Peer closed connection
     #[error(display = "Peer closed connection")]
     PeerClosed,
+    ///! Polling the control channel failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
+    ///! Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
+    ///! Client sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
+    ///! Writing to master Coord driver failed
     #[error(display = "Sending CoordEvent: {:?}", _0)]
     SendCoordEvent(#[source] mpsc::SendError),
+    ///! Transport unexpectedly stopped delivering new streams
     #[error(display = "Unexpected end of Uni stream")]
     EndOfUniStream,
+    ///! Error while accepting new stream from transport
     #[error(display = "Accepting Uni stream: {:?}", _0)]
     AcceptUniStream(#[source] ConnectionError),
 }

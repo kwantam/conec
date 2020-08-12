@@ -151,7 +151,8 @@ fn test_stream_uni() {
             sender, strmid, rec, to_send
         );
         Ok(()) as Result<(), std::io::Error>
-    }).ok();
+    })
+    .ok();
 }
 
 #[test]
@@ -200,7 +201,8 @@ fn test_stream_loopback() {
             sender, strmid, rec, to_send
         );
         Ok(()) as Result<(), std::io::Error>
-    }).ok();
+    })
+    .ok();
 }
 
 fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {

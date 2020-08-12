@@ -22,18 +22,24 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 
+///! Error variant output by [ConnectingInStream] future
 #[derive(Debug, Error)]
 pub enum InStreamError {
+    ///! Failed to read the initial message from the stream
     #[error(display = "Reading InitMsg from stream: {:?}", _0)]
     StreamRead(#[source] io::Error),
+    ///! Failed to parse initial message
     #[error(display = "Deserializing InitMsg")]
     InitMsg,
+    ///! Connection was canceled
     #[error(display = "Incoming connection canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
 }
 
+///! Ok variant output by [ConnectingInStream] future
 pub type NewInStream = (String, u32, InStream);
 
+///! An incoming stream that is currently connecting
 pub struct ConnectingInStream(oneshot::Receiver<Result<NewInStream, InStreamError>>);
 
 impl Future for ConnectingInStream {
@@ -50,12 +56,16 @@ impl Future for ConnectingInStream {
     }
 }
 
+///! Error variant output by [IncomingStreams]
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
+    ///! Transport unexpectedly stopped delivering new streams
     #[error(display = "Unexpected end of Uni stream")]
     EndOfUniStream,
+    ///! Client's connection to Coordinator disappeared
     #[error(display = "Client is gone")]
     ClientClosed,
+    ///! Error while accepting new stream from transport
     #[error(display = "Accepting Uni stream: {:?}", _0)]
     AcceptUniStream(#[source] ConnectionError),
 }
@@ -207,6 +217,9 @@ impl Drop for IncomingStreamsDriver {
     }
 }
 
+///! A [Stream] of incoming data streams from the Coordinator
+///
+/// See [library documentation](../index.html) for a usage example.
 pub struct IncomingStreams(pub(super) IncomingStreamsRef);
 
 impl Stream for IncomingStreams {

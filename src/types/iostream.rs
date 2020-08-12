@@ -75,6 +75,7 @@ impl Sink<Bytes> for OutStream {
     }
 }
 
+/*
 pub struct InOutStream {
     s_send: OutStream,
     s_recv: InStream,
@@ -117,3 +118,4 @@ impl Sink<Bytes> for InOutStream {
         self.s_send.poll_close_unpin(cx)
     }
 }
+*/
