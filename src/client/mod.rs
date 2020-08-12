@@ -51,7 +51,7 @@ pub enum ClientError {
 ///
 /// See [library documentation](../index.html) for an example of constructing a Client.
 pub struct Client {
-    endpoint: Endpoint,
+    _endpoint: Endpoint,
     coord: ClientChan,
 }
 
@@ -97,7 +97,7 @@ impl Client {
             IncomingStreams(inner)
         };
 
-        Ok((Self { endpoint, coord }, istrms))
+        Ok((Self { _endpoint: endpoint, coord }, istrms))
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator

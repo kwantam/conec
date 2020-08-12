@@ -319,7 +319,7 @@ impl Drop for CoordChanDriver {
 }
 
 pub(super) struct CoordChan {
-    pub(super) inner: CoordChanRef,
+    pub(super) _inner: CoordChanRef,
     pub(super) sender: mpsc::UnboundedSender<CoordChanEvent>,
 }
 
