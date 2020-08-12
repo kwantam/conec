@@ -4,6 +4,8 @@
 [![Crates.io](https://img.shields.io/crates/v/conec.svg)](https://crates.io/crates/conec)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
 
+## high-level description
+
 This is a brand-new WIP repo in which I'll implement the following network
 abstraction:
 
@@ -56,20 +58,7 @@ abstraction:
   their communication to one another? (The second question is only
   relevant if Coordinator is proxying messages.)
 
-- From the programmer's standpoint, a channel is an object that provides
-  methods for reading from and writing to data channels, plus methods
-  for setup / teardown, etc. Things like "Client A requests new channel
-  to Client B" are handled at the application level; CNC just provides
-  the abstractions and low-level functionality.
-
-Based on the above requirements I'm thinking the right approach is
-to use QUIC as the network transport, since it already provides the
-abstraction of multiple streams over a single network connection. For
-now, each Client will have a single QUIC connection to the Coordinator
-that handles all of that Client's channels. Later, we can make each
-channel a separate QUIC connection directly to the other endpoint.
-
-# TODOs / functionality / future features / maybes
+## TODOs / functionality / future features / maybes
 
 - error handling
     - [x] eliminate `anyhow` in favor of unboxed Error types
@@ -90,3 +79,19 @@ channel a separate QUIC connection directly to the other endpoint.
     - [ ] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg?
     - [ ] better Client naming (Coord assigns? etc.)
     - [ ] Client <-> Coord streams? pseudoclient? alt: just spin up a Client
+
+## license
+
+    Copyright 2020 Riad S. Wahby
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
