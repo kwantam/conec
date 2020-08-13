@@ -7,17 +7,29 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::{ControlMsg, InStream, OutStream};
+use super::{InStream, OutStream};
 use crate::consts::VERSION;
 
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{CertificateChain, RecvStream, SendStream, WriteError};
+use serde::{Deserialize, Serialize};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub enum ControlMsg {
+    CoNonce(String),
+    CoHello,
+    ClHello(String, String),
+    HelloError(String),
+    NewStreamReq(String, u32),
+    NewStreamOk(u32),
+    NewStreamErr(u32),
+}
 
 #[derive(Debug, Error)]
 pub enum CtrlStreamError {
