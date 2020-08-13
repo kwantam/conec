@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+use tokio::task::{JoinError, JoinHandle};
 
 ///! Coordinator constructor and driver errors
 #[derive(Debug, Error)]
@@ -51,6 +52,9 @@ pub enum CoordError {
     ///! Error binding port for transport
     #[error(display = "Binding port: {:?}", _0)]
     Bind(#[source] EndpointError),
+    ///! Error from JoinHandle future
+    #[error(display = "Join eror: {:?}", _0)]
+    Join(#[source] JoinError),
 }
 
 enum CoordEvent {
@@ -273,6 +277,7 @@ impl Future for CoordDriver {
 pub struct Coord {
     endpoint: Endpoint,
     inner: CoordRef,
+    driver_handle: JoinHandle<Result<(), CoordError>>,
 }
 
 impl Coord {
@@ -295,9 +300,9 @@ impl Coord {
 
         let inner = CoordRef::new(incoming, cert);
         let driver = CoordDriver(inner.clone());
-        tokio::spawn(async move { driver.await });
+        let driver_handle = tokio::spawn(async move { driver.await });
 
-        Ok(Self { endpoint, inner })
+        Ok(Self { endpoint, inner, driver_handle })
     }
 
     ///! Report number of connected clients
@@ -309,5 +314,17 @@ impl Coord {
     ///! Return the local address that Coord is bound to
     pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
         self.endpoint.local_addr()
+    }
+}
+
+impl Future for Coord {
+    type Output = Result<(), CoordError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match self.driver_handle.poll_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(CoordError::Join(e))),
+            Poll::Ready(Ok(res)) => Poll::Ready(res),
+        }
     }
 }
