@@ -61,10 +61,8 @@ pub enum CtrlStreamError {
     SinkFinish(#[error(source, no_from)] WriteError),
 }
 
-type CtrlRecvStream =
-    SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
-type CtrlSendStream =
-    SymmetricallyFramed<OutStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
+type CtrlRecvStream = SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
+type CtrlSendStream = SymmetricallyFramed<OutStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
 
 pub(crate) struct CtrlStream {
     s_send: CtrlSendStream,

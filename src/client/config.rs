@@ -8,6 +8,7 @@
 // except according to those terms.
 
 use crate::consts::DFLT_PORT;
+use crate::types::ConecConnAddr;
 
 use quinn::Certificate;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -19,7 +20,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 pub struct ClientConfig {
     pub(super) id: String,
     pub(super) coord: String,
-    pub(super) port: u16,
+    pub(super) addr: ConecConnAddr,
     pub(super) keylog: bool,
     pub(super) extra_ca: Option<Certificate>,
     pub(super) srcaddr: SocketAddr,
@@ -30,11 +31,19 @@ impl ClientConfig {
     ///
     /// - `id` is the Client's name, which will be used to identify it to other clients.
     /// - `coord` is the hostname of the coordinator. The coordinator's TLS certificate must match this name.
+    ///
+    /// By default, Client will attempt to resolve the hostname `coord` and connect
+    /// on the default port. Use [set_port] to change the port number, or use
+    /// [set_addr] to specify a [SocketAddr](std::net::SocketAddr) rather than
+    /// relying on name resolution.
+    ///
+    /// In all cases, the Client will ensure that the Coordinator's TLS certificate
+    /// matches the hostname specified as `coord`.
     pub fn new(id: String, coord: String) -> Self {
         Self {
             id,
             coord,
-            port: DFLT_PORT,
+            addr: ConecConnAddr::Portnum(DFLT_PORT),
             keylog: false,
             extra_ca: None,
             srcaddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
@@ -43,7 +52,16 @@ impl ClientConfig {
 
     ///! Set the Coordinator's port number to `port`
     pub fn set_port(&mut self, port: u16) -> &mut Self {
-        self.port = port;
+        self.addr = ConecConnAddr::Portnum(port);
+        self
+    }
+
+    ///! Set the Coordinator's address to `addr`, disabling name resolution
+    ///
+    /// Note that Client will still ensure that Coordinator's TLS certificate
+    /// matches the name specified to [ClientConfig::new].
+    pub fn set_addr(&mut self, addr: SocketAddr) -> &mut Self {
+        self.addr = ConecConnAddr::Sockaddr(addr);
         self
     }
 

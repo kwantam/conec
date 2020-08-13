@@ -9,16 +9,17 @@
 
 use super::{CtrlStream, CtrlStreamError};
 use crate::consts::VERSION;
+use crate::types::ConecConnAddr;
 
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    CertificateChain, ConnectError, Connection, ConnectionError, Endpoint, IncomingBiStreams,
-    IncomingUniStreams, NewConnection, OpenUni,
+    CertificateChain, ClientConfig, ConnectError, Connecting, Connection, ConnectionError,
+    Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection, OpenUni,
 };
 use rand::{thread_rng, Rng};
 use std::io;
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::SystemTime;
 
 #[derive(Debug, Error)]
@@ -52,21 +53,43 @@ pub(crate) struct ConecConn {
     ib_streams: IncomingBiStreams,
 }
 
+fn connect_help(
+    endpoint: &Endpoint,
+    addr: &SocketAddr,
+    name: &str,
+    config: Option<ClientConfig>,
+) -> Result<Connecting, ConnectError> {
+    if let Some(cfg) = config {
+        endpoint.connect_with(cfg, addr, name)
+    } else {
+        endpoint.connect(addr, name)
+    }
+}
+
 impl ConecConn {
-    pub async fn connect(
+    pub(crate) async fn connect(
         endpoint: &mut Endpoint,
-        caddr: &str,
-        cport: u16,
+        cname: &str,
+        caddr: ConecConnAddr,
+        config: Option<ClientConfig>,
     ) -> Result<(Self, IncomingUniStreams), ConecConnError> {
+        // no name resolution: explicit SocketAddr given
+        if caddr.is_sockaddr() {
+            return match connect_help(endpoint, caddr.get_addr().unwrap(), cname, config)?.await {
+                Err(_) => Err(ConecConnError::CouldNotConnect),
+                Ok(c) => Ok(Self::new(c)),
+            };
+        }
+        // name resolution
         // only attempt to connect to an address of the same type as the endpoint's local socket
-        let use_ipv4 = endpoint.local_addr()?.is_ipv4();
         let mut resolved = false;
-        for coord_addr in (caddr, cport)
+        let use_ipv4 = endpoint.local_addr()?.is_ipv4();
+        for coord_addr in (cname, caddr.get_port().unwrap())
             .to_socket_addrs()?
             .filter(|x| use_ipv4 == x.is_ipv4())
         {
             resolved = true;
-            match endpoint.connect(&coord_addr, caddr)?.await {
+            match connect_help(endpoint, &coord_addr, cname, config.clone())?.await {
                 Err(_) => continue,
                 Ok(c) => return Ok(Self::new(c)),
             }
@@ -78,7 +101,7 @@ impl ConecConn {
         }
     }
 
-    pub fn new(nc: NewConnection) -> (Self, IncomingUniStreams) {
+    pub(crate) fn new(nc: NewConnection) -> (Self, IncomingUniStreams) {
         let NewConnection {
             connection: conn,
             uni_streams: u_str,

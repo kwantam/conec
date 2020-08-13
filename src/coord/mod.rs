@@ -148,7 +148,13 @@ impl CoordInner {
                             let driver = CoordChanDriver(inner.clone());
                             tokio::spawn(async move { driver.await });
 
-                            self.clients.insert(peer, CoordChan { _inner: inner, sender });
+                            self.clients.insert(
+                                peer,
+                                CoordChan {
+                                    _inner: inner,
+                                    sender,
+                                },
+                            );
                         }
                     }
                     ChanClose(client) => {

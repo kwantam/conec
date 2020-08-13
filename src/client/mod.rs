@@ -75,7 +75,7 @@ impl Client {
 
         // set up the network endpoint and connect to the coordinator
         let (mut conn, iuni) =
-            ConecConn::connect(&mut endpoint, &config.coord[..], config.port).await?;
+            ConecConn::connect(&mut endpoint, &config.coord, config.addr, None).await?;
 
         // set up the control stream with the coordinator
         let ctrl = conn
