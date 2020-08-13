@@ -26,3 +26,6 @@ webpki = "0.21"
 [dev-dependencies]
 anyhow = "1.0"
 directories-next = "1.0"
+ring = "0.16"
+x509-signature = "0.5"
+webpki = "0.21"
