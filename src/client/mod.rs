@@ -21,14 +21,17 @@ use super::consts::ALPN_CONEC;
 use super::types::{ConecConn, ConecConnError};
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingOutStream, OutStreamError};
-use config::ClientConfig;
+use config::{CertGenError, ClientConfig};
 pub use istream::{
     ConnectingInStream, InStreamError, IncomingStreams, IncomingStreamsError, NewInStream,
 };
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
-use quinn::{ClientConfigBuilder, Endpoint, EndpointError};
+use quinn::{
+    crypto::rustls::TLSError, CertificateChain, ClientConfigBuilder, Endpoint, EndpointError,
+    ServerConfigBuilder,
+};
 
 ///! Client::new constructor errors
 #[derive(Debug, Error)]
@@ -45,6 +48,12 @@ pub enum ClientError {
     ///! Accepting control stream from Coordinator failed
     #[error(display = "Accepting control stream from coordinator: {:?}", _0)]
     AcceptCtrl(#[error(source, no_from)] ConecConnError),
+    ///! Generating certificate for client failed
+    #[error(display = "Generating certificate for client: {:?}", _0)]
+    CertificateGen(#[source] CertGenError),
+    ///! Error setting up certificate chain
+    #[error(display = "Certificate chain: {:?}", _0)]
+    CertificateChain(#[source] TLSError),
 }
 
 ///! The Client end of a connection to the Coordinator
@@ -53,11 +62,21 @@ pub enum ClientError {
 pub struct Client {
     endpoint: Endpoint,
     coord: ClientChan,
+    pub(crate) _cert: CertificateChain,
+    pub(crate) _key: Vec<u8>,
 }
 
 impl Client {
     ///! Construct a Client and connect to the Coordinator
     pub async fn new(config: ClientConfig) -> Result<(Self, IncomingStreams), ClientError> {
+        // generate client certificates
+        let config = {
+            let mut config = config;
+            config.gen_certs()?;
+            config
+        };
+        // unwrap is safe because gen_certs suceeded above
+        let (cert, privkey, key) = config.cert_and_key.unwrap();
         // build the client configuration
         let mut qcc = ClientConfigBuilder::default();
         qcc.protocols(ALPN_CONEC);
@@ -71,6 +90,18 @@ impl Client {
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(qcc.build());
+        if config.listen {
+            // build a server configuration, too
+            let mut qsc = ServerConfigBuilder::default();
+            qsc.protocols(ALPN_CONEC);
+            qsc.use_stateless_retry(config.stateless_retry);
+            if config.keylog {
+                qsc.enable_keylog();
+            }
+            qsc.certificate(cert.clone(), privkey)?;
+            // set server config on endpoint
+            endpoint.listen(qsc.build());
+        }
         let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
@@ -97,7 +128,15 @@ impl Client {
             IncomingStreams(inner)
         };
 
-        Ok((Self { endpoint, coord }, istrms))
+        Ok((
+            Self {
+                endpoint,
+                coord,
+                _cert: cert,
+                _key: key,
+            },
+            istrms,
+        ))
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator

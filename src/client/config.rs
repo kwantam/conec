@@ -9,9 +9,13 @@
 
 use crate::consts::DFLT_PORT;
 use crate::types::ConecConnAddr;
+//use crate::util::{get_cert_and_key, CertReadError};
 
-use quinn::Certificate;
+use err_derive::Error;
+use quinn::{Certificate, CertificateChain, ParseError, PrivateKey};
+use rcgen::{generate_simple_self_signed, RcgenError};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+//use std::path::PathBuf;
 
 ///! Client configuration struct
 ///
@@ -24,6 +28,18 @@ pub struct ClientConfig {
     pub(super) keylog: bool,
     pub(super) extra_ca: Option<Certificate>,
     pub(super) srcaddr: SocketAddr,
+    pub(super) cert_and_key: Option<(CertificateChain, PrivateKey, Vec<u8>)>,
+    pub(super) stateless_retry: bool,
+    pub(super) listen: bool,
+}
+
+///! Error during Client certificate generation
+#[derive(Debug, Error)]
+pub enum CertGenError {
+    #[error(display = "Generating self-signed cert: {:?}", _0)]
+    Generating(#[source] RcgenError),
+    #[error(display = "Parsing secret key: {:?}", _0)]
+    Parse(#[source] ParseError),
 }
 
 impl ClientConfig {
@@ -47,6 +63,9 @@ impl ClientConfig {
             keylog: false,
             extra_ca: None,
             srcaddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            cert_and_key: None,
+            stateless_retry: false,
+            listen: true,
         }
     }
 
@@ -90,5 +109,45 @@ impl ClientConfig {
     pub fn set_srcaddr(&mut self, src: SocketAddr) -> &mut Self {
         self.srcaddr = src;
         self
+    }
+
+    ///! Enable QUIC stateless retry.
+    ///
+    /// Per QUIC spec, stateless retry defends against client address spoofing.
+    /// The downside is that this adds another round-trip to new connections.
+    pub fn enable_stateless_retry(&mut self) -> &mut Self {
+        self.stateless_retry = true;
+        self
+    }
+
+    ///! Disable Client listening for incoming direct connections
+    ///
+    /// This means that all streams must be proxed through Coordinator
+    pub fn disable_listen(&mut self) -> &mut Self {
+        self.listen = false;
+        self
+    }
+
+    /*
+    ///! Set a certificate and key for Client's use
+    ///
+    /// This certificate is used when accepting direct connections from other clients.
+    pub fn set_cert(&mut self, cert_path: PathBuf, key_path: PathBuf) -> Result<&mut Self, CertReadError> {
+        let cert_and_key = get_cert_and_key(cert_path, key_path)?;
+        self.cert_and_key = Some(cert_and_key);
+        Ok(self)
+    }
+    */
+
+    pub(super) fn gen_certs(&mut self) -> Result<(), CertGenError> {
+        if self.cert_and_key.is_some() {
+            return Ok(());
+        }
+
+        let cert = generate_simple_self_signed(&[self.id.clone()][..])?;
+        let key = cert.serialize_private_key_der();
+        let cert = CertificateChain::from_certs(Certificate::from_der(&cert.serialize_der()?));
+        self.cert_and_key = Some((cert, PrivateKey::from_der(&key)?, key));
+        Ok(())
     }
 }

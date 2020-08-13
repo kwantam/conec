@@ -12,8 +12,11 @@ use crate::types::{ControlMsg, CtrlStream};
 
 use err_derive::Error;
 use futures::prelude::*;
+use quinn::{Certificate, CertificateChain, ParseError, PrivateKey};
 use std::collections::VecDeque;
+use std::fs::read as fs_read;
 use std::io;
+use std::path::PathBuf;
 use std::task::{Context, Poll};
 
 #[derive(Debug, Error)]
@@ -56,4 +59,38 @@ pub(crate) fn drive_ctrl_send(
         Poll::Ready(Err(e)) => Err(SinkError::Flush(e)),
     }?;
     Ok(cont)
+}
+
+///! Errors when constructing a new coordinator configuration
+#[derive(Debug, Error)]
+pub enum CertReadError {
+    ///! Failed to read certificate or key file
+    #[error(display = "Reading certificate or key file: {:?}", _0)]
+    ReadingCertOrKey(#[source] io::Error),
+    ///! Failed to parse certificate or key
+    #[error(display = "Parsing certificate or key: {:?}", _0)]
+    ParsingCertOrKey(#[source] ParseError),
+}
+
+pub(crate) fn get_cert_and_key(
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> Result<(CertificateChain, PrivateKey), CertReadError> {
+    let key = {
+        let tmp = fs_read(&key_path)?;
+        if key_path.extension().map_or(false, |x| x == "der") {
+            PrivateKey::from_der(&tmp)
+        } else {
+            PrivateKey::from_pem(&tmp)
+        }
+    }?;
+    let cert = {
+        let tmp = fs_read(&cert_path)?;
+        if cert_path.extension().map_or(false, |x| x == "der") {
+            CertificateChain::from_certs(Certificate::from_der(&tmp))
+        } else {
+            CertificateChain::from_pem(&tmp)?
+        }
+    };
+    Ok((cert, key))
 }

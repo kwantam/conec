@@ -8,24 +8,11 @@
 // except according to those terms.
 
 use crate::consts::DFLT_PORT;
+use crate::util::{get_cert_and_key, CertReadError};
 
-use err_derive::Error;
-use quinn::{Certificate, CertificateChain, ParseError, PrivateKey};
-use std::fs::read as fs_read;
-use std::io;
+use quinn::{CertificateChain, PrivateKey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-
-///! Errors when constructing a new coordinator configuration
-#[derive(Debug, Error)]
-pub enum CoordConfigError {
-    ///! Failed to read certificate or key file
-    #[error(display = "Reading certificate or key file: {:?}", _0)]
-    ReadingCertOrKey(#[source] io::Error),
-    ///! Failed to parse certificate or key
-    #[error(display = "Parsing certificate or key: {:?}", _0)]
-    ParsingCertOrKey(#[source] ParseError),
-}
 
 ///! Coordinator configuration struct
 ///
@@ -35,8 +22,7 @@ pub struct CoordConfig {
     pub(super) laddr: SocketAddr,
     pub(super) keylog: bool,
     pub(super) stateless_retry: bool,
-    pub(super) cert: CertificateChain,
-    pub(super) key: PrivateKey,
+    pub(super) cert_and_key: (CertificateChain, PrivateKey),
 }
 
 impl CoordConfig {
@@ -44,29 +30,13 @@ impl CoordConfig {
     ///
     /// - `cert_path` is the path to a certificate in PEM or DER format
     /// - `key_path` is the path to the corresponding key in PEM or DER format
-    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> Result<Self, CoordConfigError> {
-        let key = {
-            let tmp = fs_read(&key_path)?;
-            if key_path.extension().map_or(false, |x| x == "der") {
-                PrivateKey::from_der(&tmp)
-            } else {
-                PrivateKey::from_pem(&tmp)
-            }
-        }?;
-        let cert = {
-            let tmp = fs_read(&cert_path)?;
-            if cert_path.extension().map_or(false, |x| x == "der") {
-                CertificateChain::from_certs(Certificate::from_der(&tmp))
-            } else {
-                CertificateChain::from_pem(&tmp)?
-            }
-        };
+    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> Result<Self, CertReadError> {
+        let cert_and_key = get_cert_and_key(cert_path, key_path)?;
         Ok(Self {
             laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
             keylog: false,
             stateless_retry: false,
-            cert,
-            key,
+            cert_and_key,
         })
     }
 

@@ -15,6 +15,7 @@ err-derive = "0.2"
 futures = "0.3"
 quinn = "0.6"
 rand = "0.7"
+rcgen = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 tokio = "0.2"
 tokio-serde = { version = "0.6", features = ["bincode"] }
@@ -25,4 +26,3 @@ webpki = "0.21"
 [dev-dependencies]
 anyhow = "1.0"
 directories-next = "1.0"
-rcgen = "0.8"

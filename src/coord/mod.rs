@@ -47,7 +47,7 @@ pub enum CoordError {
     Control(#[source] ConecConnError),
     ///! Error setting up certificate chain
     #[error(display = "Certificate: {:?}", _0)]
-    Certificate(#[source] TLSError),
+    CertificateChain(#[source] TLSError),
     ///! Error binding port for transport
     #[error(display = "Binding port: {:?}", _0)]
     Bind(#[source] EndpointError),
@@ -285,14 +285,15 @@ impl Coord {
         if config.keylog {
             qsc.enable_keylog();
         }
-        qsc.certificate(config.cert.clone(), config.key)?;
+        let (cert, key) = config.cert_and_key;
+        qsc.certificate(cert.clone(), key)?;
 
         // build QUIC endpoint
         let mut endpoint = Endpoint::builder();
         endpoint.listen(qsc.build());
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        let inner = CoordRef::new(incoming, config.cert);
+        let inner = CoordRef::new(incoming, cert);
         let driver = CoordDriver(inner.clone());
         tokio::spawn(async move { driver.await });
 
