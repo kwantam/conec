@@ -302,7 +302,11 @@ impl Coord {
         let driver = CoordDriver(inner.clone());
         let driver_handle = tokio::spawn(async move { driver.await });
 
-        Ok(Self { endpoint, inner, driver_handle })
+        Ok(Self {
+            endpoint,
+            inner,
+            driver_handle,
+        })
     }
 
     ///! Report number of connected clients
