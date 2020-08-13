@@ -40,15 +40,16 @@ fn test_simple() {
         let coord = {
             let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
             coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(55110);
+            coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
         };
+        let port = coord.local_addr().unwrap().port();
 
         // start client
         let client = {
             let mut client_cfg = ClientConfig::new("client".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert);
-            client_cfg.set_port(55110);
+            client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
@@ -73,15 +74,15 @@ fn test_repeat_name() {
         let coord = {
             let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
             coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(55111);
+            coord_cfg.set_port(0);
             Coord::new(coord_cfg).await.unwrap()
         };
+        let port = coord.local_addr().unwrap().port();
 
         // start client
         let client_cfg = {
             let mut tmp = ClientConfig::new("client".to_string(), "localhost".to_string());
-            tmp.set_ca(cert);
-            tmp.set_port(55111);
+            tmp.set_ca(cert).set_port(port);
             tmp
         };
         let client = Client::new(client_cfg.clone()).await.unwrap();
@@ -119,15 +120,16 @@ fn test_stream_uni() {
         let coord = {
             let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
             coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(55112);
+            coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
         };
+        let port = coord.local_addr().unwrap().port();
 
         // start client 1
         let (client1, _inc1) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert.clone());
-            client_cfg.set_port(55112);
+            client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
@@ -135,7 +137,7 @@ fn test_stream_uni() {
         let (_client2, mut inc2) = {
             let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert);
-            client_cfg.set_port(55112);
+            client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
@@ -177,15 +179,16 @@ fn test_stream_loopback() {
         let coord = {
             let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
             coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(55113);
+            coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
         };
+        let port = coord.local_addr().unwrap().port();
 
         // start client 1
         let (client, mut inc) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert.clone());
-            client_cfg.set_port(55113);
+            client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
@@ -227,15 +230,16 @@ fn test_client_signing() {
         let coord = {
             let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
             coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(55113);
+            coord_cfg.set_port(0);
             Coord::new(coord_cfg).await.unwrap()
         };
+        let port = coord.local_addr().unwrap().port();
 
         // start client
         let (client, _inc) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert.clone());
-            client_cfg.set_port(55113);
+            client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
