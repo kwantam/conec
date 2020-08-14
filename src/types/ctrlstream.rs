@@ -12,7 +12,8 @@ use crate::consts::VERSION;
 
 use err_derive::Error;
 use futures::prelude::*;
-use quinn::{CertificateChain, RecvStream, SendStream, WriteError};
+use quinn::{Certificate, CertificateChain, RecvStream, SendStream, WriteError};
+use ring::{error::Unspecified, rand::SystemRandom, signature::EcdsaKeyPair};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::pin::Pin;
@@ -59,6 +60,8 @@ pub enum CtrlStreamError {
     SinkFlush(#[error(source, no_from)] io::Error),
     #[error(display = "Sink finish: {:?}", _0)]
     SinkFinish(#[error(source, no_from)] WriteError),
+    #[error(display = "Signing error: {:?}", _0)]
+    SignNonce(#[error(from)] Unspecified),
 }
 
 type CtrlRecvStream = SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
@@ -86,7 +89,9 @@ impl CtrlStream {
     pub(super) async fn send_hello(
         &mut self,
         id: String,
-        certs: CertificateChain,
+        srv_certs: CertificateChain,
+        _cert: &Certificate,
+        key: &EcdsaKeyPair,
     ) -> Result<(), CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
@@ -101,9 +106,12 @@ impl CtrlStream {
         if &nonce[..VERSION.len()] != VERSION {
             return Err(VersionMismatch((&nonce[..VERSION.len()]).to_string()));
         }
-        // append certificate to nonce
-        // XXX here we should be signing under our client key and sending back
-        let new_nonce = format!("{}::{:?}", nonce, certs);
+        // append certificate to nonce and sign it
+        let new_nonce = format!("{}::{:?}", nonce, srv_certs);
+        let _sig = {
+            let rng = SystemRandom::new();
+            key.sign(&rng, new_nonce.as_ref())?
+        };
 
         // next, send back the hello
         self.send(ClHello(id, new_nonce))

@@ -120,7 +120,7 @@ impl Client {
 
         // set up the control stream with the coordinator
         let ctrl = conn
-            .accept_ctrl(config.id)
+            .accept_ctrl(config.id, &clt_cert, &clt_key)
             .await
             .map_err(ClientError::AcceptCtrl)?;
 

@@ -14,10 +14,11 @@ use crate::types::ConecConnAddr;
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    CertificateChain, ClientConfig, ConnectError, Connecting, Connection, ConnectionError,
+    Certificate, CertificateChain, ClientConfig, ConnectError, Connecting, Connection, ConnectionError,
     Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection, OpenUni,
 };
 use rand::{thread_rng, Rng};
+use ring::signature::EcdsaKeyPair;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::SystemTime;
@@ -117,7 +118,7 @@ impl ConecConn {
         )
     }
 
-    pub(crate) async fn accept_ctrl(&mut self, id: String) -> Result<CtrlStream, ConecConnError> {
+    pub(crate) async fn accept_ctrl(&mut self, id: String, cert: &Certificate, key: &EcdsaKeyPair) -> Result<CtrlStream, ConecConnError> {
         let (cc_send, cc_recv) = self
             .ib_streams
             .next()
@@ -126,13 +127,13 @@ impl ConecConn {
             .map_err(ConecConnError::AcceptBidiStream)?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
-        let certs = self
+        let srv_certs = self
             .connection
             .authentication_data()
             .peer_certificates
             .ok_or(ConecConnError::CertificateChain)?;
         ctrl_stream
-            .send_hello(id, certs)
+            .send_hello(id, srv_certs, cert, key)
             .await
             .map_err(ConecConnError::SendHello)?;
         Ok(ctrl_stream)
