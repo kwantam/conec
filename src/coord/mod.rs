@@ -58,7 +58,7 @@ pub enum CoordError {
 }
 
 enum CoordEvent {
-    Accepted(ConecConn, CtrlStream, IncomingUniStreams, String),
+    Accepted(ConecConn, CtrlStream, IncomingUniStreams, String, Vec<u8>),
     AcceptError(CoordError),
     ChanClose(String),
     NewStreamReq(String, String, u32),
@@ -96,7 +96,7 @@ impl CoordInner {
                             }
                             Ok(conn) => ConecConn::new(conn),
                         };
-                        let (ctrl, peer) = match conn.connect_ctrl(certs).await {
+                        let (ctrl, peer, cert) = match conn.connect_ctrl(certs).await {
                             Err(e) => {
                                 sender.unbounded_send(AcceptError(Control(e))).unwrap();
                                 return;
@@ -104,7 +104,7 @@ impl CoordInner {
                             Ok(ctrl_peer) => ctrl_peer,
                         };
                         sender
-                            .unbounded_send(Accepted(conn, ctrl, iuni, peer))
+                            .unbounded_send(Accepted(conn, ctrl, iuni, peer, cert))
                             .unwrap();
                     });
                     Ok(())
@@ -128,7 +128,7 @@ impl CoordInner {
                     AcceptError(e) => {
                         tracing::warn!("got AcceptError: {}", e);
                     }
-                    Accepted(conn, ctrl, iuni, peer) => {
+                    Accepted(conn, ctrl, iuni, peer, cert) => {
                         if self.clients.get(&peer).is_some() {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
@@ -145,6 +145,7 @@ impl CoordInner {
                                 ctrl,
                                 iuni,
                                 peer.clone(),
+                                cert,
                                 self.sender.clone(),
                             );
 

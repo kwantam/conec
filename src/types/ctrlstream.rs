@@ -20,12 +20,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use webpki::{
+    trust_anchor_util::cert_der_as_trust_anchor, DNSNameRef, EndEntityCert, TLSServerTrustAnchors,
+    ECDSA_P256_SHA256,
+};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ControlMsg {
     CoNonce(String),
     CoHello,
-    ClHello(String, String),
+    ClHello(String, Vec<u8>, Vec<u8>),
     HelloError(String),
     NewStreamReq(String, u32),
     NewStreamOk(u32),
@@ -55,13 +59,17 @@ pub enum CtrlStreamError {
     #[error(display = "Send CoNonce: {:?}", _0)]
     NonceSend(#[error(source, no_from)] io::Error),
     #[error(display = "Bad client auth message")]
-    BadClientAuth,
+    BadClientAuth(#[error(source, no_from)] webpki::Error),
     #[error(display = "Sink flush: {:?}", _0)]
     SinkFlush(#[error(source, no_from)] io::Error),
     #[error(display = "Sink finish: {:?}", _0)]
     SinkFinish(#[error(source, no_from)] WriteError),
     #[error(display = "Signing error: {:?}", _0)]
     SignNonce(#[error(from)] Unspecified),
+    #[error(display = "Parsing client's cert: {:?}", _0)]
+    ParseCert(#[source] webpki::Error),
+    #[error(display = "Invalid client name: {:?}", _0)]
+    InvalidName(#[source] webpki::InvalidDNSNameError),
 }
 
 type CtrlRecvStream = SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
@@ -90,7 +98,7 @@ impl CtrlStream {
         &mut self,
         id: String,
         srv_certs: CertificateChain,
-        _cert: &Certificate,
+        cert: &Certificate,
         key: &EcdsaKeyPair,
     ) -> Result<(), CtrlStreamError> {
         use ControlMsg::*;
@@ -107,14 +115,15 @@ impl CtrlStream {
             return Err(VersionMismatch((&nonce[..VERSION.len()]).to_string()));
         }
         // append certificate to nonce and sign it
-        let new_nonce = format!("{}::{:?}", nonce, srv_certs);
-        let _sig = {
+        // XXX don't love that I have to use Debug for srv_certs; better way?
+        let to_sign = format!("{}::{:?}", nonce, srv_certs);
+        let sig = {
             let rng = SystemRandom::new();
-            key.sign(&rng, new_nonce.as_ref())?
+            key.sign(&rng, to_sign.as_ref())?
         };
 
         // next, send back the hello
-        self.send(ClHello(id, new_nonce))
+        self.send(ClHello(id, cert.as_der().to_vec(), sig.as_ref().to_vec()))
             .await
             .map_err(SendClHello)?;
 
@@ -137,27 +146,36 @@ impl CtrlStream {
         &mut self,
         nonce: &str,
         certs: CertificateChain,
-    ) -> Result<String, CtrlStreamError> {
+    ) -> Result<(String, Vec<u8>), CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
 
-        let (pid, sig) = match self.try_next().await.map_err(RecvClHello)? {
-            Some(ClHello(pid, sig)) => Ok((pid, sig)),
-            Some(msg) => Err(WrongMessage(msg, ClHello("".to_string(), "".to_string()))),
+        let (pid, cder, sig) = match self.try_next().await.map_err(RecvClHello)? {
+            Some(ClHello(pid, cert, sig)) => Ok((pid, cert, sig)),
+            Some(msg) => Err(WrongMessage(
+                msg,
+                ClHello("".to_string(), Vec::new(), Vec::new()),
+            )),
             None => Err(EndOfCtrlStream),
         }?;
 
+        // validate cert and signature from client
+        let trust = cert_der_as_trust_anchor(&cder[..])?;
+        let cert = EndEntityCert::from(&cder[..])?;
+        cert.verify_is_valid_tls_server_cert(
+            &[&ECDSA_P256_SHA256],
+            &TLSServerTrustAnchors(&[trust]),
+            &[],
+            webpki::Time::try_from(std::time::SystemTime::now())?,
+        )?;
+        cert.verify_is_valid_for_dns_name(DNSNameRef::try_from_ascii_str(&pid[..])?)?;
+
         // for channel binding, append expected server cert chain to nonce
-        // XXX here we should be checking a signature and maybe a certificate
-        let nonce_expect = format!("{}::{:?}", nonce, certs);
-        if sig != nonce_expect {
-            self.send(HelloError("nonce mismatch".to_string()))
-                .await
-                .ok();
-            self.finish().await.ok();
-            Err(BadClientAuth)
-        } else {
-            Ok(pid)
+        // XXX don't love that I have to use Debug for srv_certs; better way?
+        let msg_expect = format!("{}::{:?}", nonce, certs);
+        match cert.verify_signature(&ECDSA_P256_SHA256, msg_expect.as_ref(), &sig[..]) {
+            Ok(()) => Ok((pid, cder)),
+            Err(e) => Err(BadClientAuth(e)),
         }
     }
 

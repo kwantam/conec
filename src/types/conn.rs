@@ -7,15 +7,15 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::{CtrlStream, CtrlStreamError};
+use super::{ControlMsg, CtrlStream, CtrlStreamError};
 use crate::consts::VERSION;
 use crate::types::ConecConnAddr;
 
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    Certificate, CertificateChain, ClientConfig, ConnectError, Connecting, Connection, ConnectionError,
-    Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection, OpenUni,
+    Certificate, CertificateChain, ClientConfig, ConnectError, Connecting, Connection,
+    ConnectionError, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection, OpenUni,
 };
 use rand::{thread_rng, Rng};
 use ring::signature::EcdsaKeyPair;
@@ -118,7 +118,12 @@ impl ConecConn {
         )
     }
 
-    pub(crate) async fn accept_ctrl(&mut self, id: String, cert: &Certificate, key: &EcdsaKeyPair) -> Result<CtrlStream, ConecConnError> {
+    pub(crate) async fn accept_ctrl(
+        &mut self,
+        id: String,
+        cert: &Certificate,
+        key: &EcdsaKeyPair,
+    ) -> Result<CtrlStream, ConecConnError> {
         let (cc_send, cc_recv) = self
             .ib_streams
             .next()
@@ -142,7 +147,7 @@ impl ConecConn {
     pub(crate) async fn connect_ctrl(
         &mut self,
         certs: CertificateChain,
-    ) -> Result<(CtrlStream, String), ConecConnError> {
+    ) -> Result<(CtrlStream, String, Vec<u8>), ConecConnError> {
         // open a new control stream to newly connected client
         let (cc_send, cc_recv) = self
             .connection
@@ -174,12 +179,18 @@ impl ConecConn {
             .await
             .map_err(ConecConnError::NonceSend)?;
 
-        // expect the client's hello back
-        let peer = ctrl_stream
-            .recv_hello(&nonce, certs)
-            .await
-            .map_err(ConecConnError::RecvHello)?;
-        Ok((ctrl_stream, peer))
+        // expect the client's hello back, otherwise try to send client an error
+        match ctrl_stream.recv_hello(&nonce, certs).await {
+            Ok((peer, cert)) => Ok((ctrl_stream, peer, cert)),
+            Err(e) => {
+                ctrl_stream
+                    .send(ControlMsg::HelloError(format!("{:?}", e)))
+                    .await
+                    .ok();
+                ctrl_stream.finish().await.ok();
+                Err(ConecConnError::RecvHello(e))
+            }
+        }
     }
 
     pub(crate) fn open_uni(&mut self) -> OpenUni {

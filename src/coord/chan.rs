@@ -55,6 +55,8 @@ pub(super) struct CoordChanInner {
     ctrl: CtrlStream,
     iuni: IncomingUniStreams,
     peer: String,
+    #[allow(dead_code)]
+    cert: Vec<u8>,
     coord: mpsc::UnboundedSender<CoordEvent>,
     sender: mpsc::UnboundedSender<CoordChanEvent>,
     events: mpsc::UnboundedReceiver<CoordChanEvent>,
@@ -245,6 +247,7 @@ impl CoordChanRef {
         ctrl: CtrlStream,
         iuni: IncomingUniStreams,
         peer: String,
+        cert: Vec<u8>,
         coord: mpsc::UnboundedSender<CoordEvent>,
     ) -> (Self, mpsc::UnboundedSender<CoordChanEvent>) {
         let mut to_send = VecDeque::new();
@@ -257,6 +260,7 @@ impl CoordChanRef {
                 ctrl,
                 iuni,
                 peer,
+                cert,
                 coord,
                 sender: sender.clone(),
                 events,
