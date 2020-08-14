@@ -70,15 +70,24 @@ abstraction:
     - [x] proxied streams through coordinator
 - future features and improvements
     - [x] for Client futures: `map(|x| x.map_err(FooError))` to get rid of multiple unwraps
-    - [ ] switch from String to Bytes where possible to reduce copying
+    - [ ] switch from String to Bytes where possible to reduce copying?
+        - atomics seem likely to be more expensive than copies for this case!
+    - [x] Client authentication via pubkeys
+        - right now, client connects with ephemeral self-signed cert. once we
+          add client-to-client connections, coord will pass that cert to client.
+          REVISIT?
     - [ ] direct Client-to-Client channels
     - [ ] NAT detection / traversal
-    - [ ] Client authentication and naming via pubkeys
+        - probably not so hard: clone UdpSocket, send a few packets on a timer
+          when we try to connect directly to another client. This should work
+          for most cases that are not symmetric NATs.
+    - [ ] automagically pick client-to-client vs proxied streams
 - questions / maybes
     - [x] Client driver - what is the API for this? one driver for whole client?
     - [ ] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg?
-    - [ ] better Client naming (Coord assigns? etc.)
+    - [ ] better Client naming (name by pubkey? but only if not ephemeral...)
     - [ ] Client <-> Coord streams? pseudoclient? alt: just spin up a Client
+        - this seems like it should be quite easy to handle
 
 ## license
 
