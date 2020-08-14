@@ -143,22 +143,87 @@ fn test_stream_uni() {
         assert_eq!(coord.num_clients(), 2);
 
         // open stream to client2
-        let mut s12 = client1
+        let (mut s12, _r21) = client1
             .new_stream("client2".to_string())
             .unwrap()
             .await
             .unwrap();
         // receive stream at client2
-        let (sender, strmid, mut r12) = inc2.next().await.unwrap().await.unwrap();
+        let (_sender, _strmid, _s21, mut r12) = inc2.next().await.unwrap().await.unwrap();
 
-        let to_send = Bytes::from("asdf");
+        let to_send = Bytes::from("test stream");
         s12.send(to_send.clone()).await.unwrap();
         let rec = r12.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
+        /*
         println!(
             "{}:{} sent '{:?}' (expected: '{:?}')",
             sender, strmid, rec, to_send
         );
+        */
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_stream_bi() {
+    let (cert, cpath, kpath) = get_cert_and_paths();
+    let mut rt = runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async move {
+        // start server
+        let coord = {
+            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca(cert.clone());
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (_client2, mut inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca(cert);
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 2);
+
+        // open stream to client2
+        let (mut s12, mut r21) = client1
+            .new_stream("client2".to_string())
+            .unwrap()
+            .await
+            .unwrap();
+        // receive stream at client2
+        let (_sender, _strmid, mut s21, mut r12) = inc2.next().await.unwrap().await.unwrap();
+
+        let to_send = Bytes::from("ping pong");
+        s12.send(to_send.clone()).await.unwrap();
+        let rec = r12.try_next().await?.unwrap().freeze();
+        s21.send(rec).await.unwrap();
+        let rec = r21.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+        /*
+        println!(
+            "{}:{} sent '{:?}' (expected: '{:?}')",
+            sender, strmid, rec, to_send
+        );
+        */
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -194,22 +259,26 @@ fn test_stream_loopback() {
         assert_eq!(coord.num_clients(), 1);
 
         // open stream to client
-        let mut s11 = client
+        let (mut s11, mut r11x) = client
             .new_stream("client1".to_string())
             .unwrap()
             .await
             .unwrap();
         // receive stream at client
-        let (sender, strmid, mut r11) = inc.next().await.unwrap().await.unwrap();
+        let (_sender, _strmid, mut s11x, mut r11) = inc.next().await.unwrap().await.unwrap();
 
         let to_send = Bytes::from("loopback stream");
         s11.send(to_send.clone()).await.unwrap();
-        let rec = r11.try_next().await?.unwrap();
+        let rec = r11.try_next().await?.unwrap().freeze();
+        s11x.send(rec).await.unwrap();
+        let rec = r11x.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
+        /*
         println!(
             "{}:{} sent '{:?}' (expected: '{:?}')",
             sender, strmid, rec, to_send
         );
+        */
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();

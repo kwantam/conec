@@ -15,7 +15,7 @@ use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
     Certificate, CertificateChain, ClientConfig, ConnectError, Connecting, Connection,
-    ConnectionError, Endpoint, IncomingBiStreams, IncomingUniStreams, NewConnection, OpenUni,
+    ConnectionError, Endpoint, IncomingBiStreams, NewConnection, OpenBi,
 };
 use rand::{thread_rng, Rng};
 use ring::signature::EcdsaKeyPair;
@@ -49,10 +49,7 @@ pub enum ConecConnError {
     RecvHello(#[error(source, no_from)] CtrlStreamError),
 }
 
-pub(crate) struct ConecConn {
-    connection: Connection,
-    ib_streams: IncomingBiStreams,
-}
+pub(crate) struct ConecConn(Connection);
 
 fn connect_help(
     endpoint: &Endpoint,
@@ -73,7 +70,7 @@ impl ConecConn {
         cname: &str,
         caddr: ConecConnAddr,
         config: Option<ClientConfig>,
-    ) -> Result<(Self, IncomingUniStreams), ConecConnError> {
+    ) -> Result<(Self, IncomingBiStreams), ConecConnError> {
         // no name resolution: explicit SocketAddr given
         if caddr.is_sockaddr() {
             return match connect_help(endpoint, caddr.get_addr().unwrap(), cname, config)?.await {
@@ -102,20 +99,13 @@ impl ConecConn {
         }
     }
 
-    pub(crate) fn new(nc: NewConnection) -> (Self, IncomingUniStreams) {
+    pub(crate) fn new(nc: NewConnection) -> (Self, IncomingBiStreams) {
         let NewConnection {
             connection: conn,
-            uni_streams: u_str,
             bi_streams: b_str,
             ..
-        } = nc;
-        (
-            Self {
-                connection: conn,
-                ib_streams: b_str,
-            },
-            u_str,
-        )
+        } = { nc };
+        (Self(conn), b_str)
     }
 
     pub(crate) async fn accept_ctrl(
@@ -123,9 +113,9 @@ impl ConecConn {
         id: String,
         cert: &Certificate,
         key: &EcdsaKeyPair,
+        ibi: &mut IncomingBiStreams,
     ) -> Result<CtrlStream, ConecConnError> {
-        let (cc_send, cc_recv) = self
-            .ib_streams
+        let (cc_send, cc_recv) = ibi
             .next()
             .await
             .ok_or(ConecConnError::EndOfBidiStream)?
@@ -133,7 +123,7 @@ impl ConecConn {
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         let srv_certs = self
-            .connection
+            .0
             .authentication_data()
             .peer_certificates
             .ok_or(ConecConnError::CertificateChain)?;
@@ -150,7 +140,7 @@ impl ConecConn {
     ) -> Result<(CtrlStream, String, Vec<u8>), ConecConnError> {
         // open a new control stream to newly connected client
         let (cc_send, cc_recv) = self
-            .connection
+            .0
             .open_bi()
             .await
             .map_err(ConecConnError::OpenBidiStream)?;
@@ -161,7 +151,7 @@ impl ConecConn {
             // version string
             let mut tmp = VERSION.to_string();
             // remote address
-            tmp += &self.connection.remote_address().to_string();
+            tmp += &self.remote_addr().to_string();
             tmp += "::";
             // time
             tmp += &SystemTime::now()
@@ -193,11 +183,11 @@ impl ConecConn {
         }
     }
 
-    pub(crate) fn open_uni(&mut self) -> OpenUni {
-        self.connection.open_uni()
+    pub(crate) fn open_bi(&mut self) -> OpenBi {
+        self.0.open_bi()
     }
 
     pub(crate) fn remote_addr(&self) -> SocketAddr {
-        self.connection.remote_address()
+        self.0.remote_address()
     }
 }

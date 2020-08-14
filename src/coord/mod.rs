@@ -26,7 +26,7 @@ use futures::channel::mpsc;
 use futures::prelude::*;
 use quinn::{
     crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
-    IncomingUniStreams, SendStream, ServerConfigBuilder,
+    IncomingBiStreams, RecvStream, SendStream, ServerConfigBuilder,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -58,11 +58,15 @@ pub enum CoordError {
 }
 
 enum CoordEvent {
-    Accepted(ConecConn, CtrlStream, IncomingUniStreams, String, Vec<u8>),
+    Accepted(ConecConn, CtrlStream, IncomingBiStreams, String, Vec<u8>),
     AcceptError(CoordError),
     ChanClose(String),
     NewStreamReq(String, String, u32),
-    NewStreamRes(String, u32, Result<SendStream, ConnectionError>),
+    NewStreamRes(
+        String,
+        u32,
+        Result<(SendStream, RecvStream), ConnectionError>,
+    ),
 }
 
 struct CoordInner {
@@ -89,7 +93,7 @@ impl CoordInner {
                     tokio::spawn(async move {
                         use CoordError::*;
                         use CoordEvent::*;
-                        let (mut conn, iuni) = match incoming.await {
+                        let (mut conn, ibi) = match incoming.await {
                             Err(e) => {
                                 sender.unbounded_send(AcceptError(Connect(e))).unwrap();
                                 return;
@@ -104,7 +108,7 @@ impl CoordInner {
                             Ok(ctrl_peer) => ctrl_peer,
                         };
                         sender
-                            .unbounded_send(Accepted(conn, ctrl, iuni, peer, cert))
+                            .unbounded_send(Accepted(conn, ctrl, ibi, peer, cert))
                             .unwrap();
                     });
                     Ok(())
@@ -128,7 +132,7 @@ impl CoordInner {
                     AcceptError(e) => {
                         tracing::warn!("got AcceptError: {}", e);
                     }
-                    Accepted(conn, ctrl, iuni, peer, cert) => {
+                    Accepted(conn, ctrl, ibi, peer, cert) => {
                         if self.clients.get(&peer).is_some() {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
@@ -143,7 +147,7 @@ impl CoordInner {
                             let (inner, sender) = CoordChanRef::new(
                                 conn,
                                 ctrl,
-                                iuni,
+                                ibi,
                                 peer.clone(),
                                 cert,
                                 self.sender.clone(),

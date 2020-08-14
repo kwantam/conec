@@ -49,8 +49,8 @@ impl ClientConfig {
     /// - `coord` is the hostname of the coordinator. The coordinator's TLS certificate must match this name.
     ///
     /// By default, Client will attempt to resolve the hostname `coord` and connect
-    /// on the default port. Use [set_port] to change the port number, or use
-    /// [set_addr] to specify a [SocketAddr](std::net::SocketAddr) rather than
+    /// on the default port. Use [set_port](ClientConfig::set_port) to change the port number, or use
+    /// [set_addr](ClientConfig::set_addr) to specify a [SocketAddr](std::net::SocketAddr) rather than
     /// relying on name resolution.
     ///
     /// In all cases, the Client will ensure that the Coordinator's TLS certificate

@@ -9,13 +9,13 @@
 
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream};
 use crate::util;
 
 use err_derive::Error;
 use futures::channel::mpsc;
 use futures::prelude::*;
-use quinn::{ConnectionError, IncomingUniStreams, SendStream};
+use quinn::{ConnectionError, IncomingBiStreams, RecvStream, SendStream};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -43,17 +43,17 @@ pub enum CoordChanError {
     #[error(display = "Sending CoordEvent: {:?}", _0)]
     SendCoordEvent(#[source] mpsc::SendError),
     ///! Transport unexpectedly stopped delivering new streams
-    #[error(display = "Unexpected end of Uni stream")]
-    EndOfUniStream,
+    #[error(display = "Unexpected end of Bi stream")]
+    EndOfBiStream,
     ///! Error while accepting new stream from transport
-    #[error(display = "Accepting Uni stream: {:?}", _0)]
-    AcceptUniStream(#[source] ConnectionError),
+    #[error(display = "Accepting Bi stream: {:?}", _0)]
+    AcceptBiStream(#[source] ConnectionError),
 }
 
 pub(super) struct CoordChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
-    iuni: IncomingUniStreams,
+    ibi: IncomingBiStreams,
     peer: String,
     #[allow(dead_code)]
     cert: Vec<u8>,
@@ -65,14 +65,14 @@ pub(super) struct CoordChanInner {
     driver_lost: bool,
     to_send: VecDeque<ControlMsg>,
     flushing: bool,
-    new_streams: HashMap<u32, SendStream>,
+    new_streams: HashMap<u32, (SendStream, RecvStream)>,
 }
 
 pub(super) enum CoordChanEvent {
     NSErr(u32),
     NSReq(String, u32),
-    NSRes(u32, Result<SendStream, ConnectionError>),
-    IUni(u32, InStream),
+    NSRes(u32, Result<(SendStream, RecvStream), ConnectionError>),
+    BiIn(u32, OutStream, InStream),
 }
 
 impl CoordChanInner {
@@ -118,22 +118,22 @@ impl CoordChanInner {
                         Err(_) => {
                             self.to_send.push_back(ControlMsg::NewStreamErr(sid));
                         }
-                        Ok(strm) => {
+                        Ok((send, recv)) => {
                             self.to_send.push_back(ControlMsg::NewStreamOk(sid));
-                            self.new_streams.insert(sid, strm);
+                            self.new_streams.insert(sid, (send, recv));
                         }
                     },
                     NSReq(to, sid) => {
                         let coord = self.coord.clone();
-                        let uni = self.conn.open_uni();
+                        let bi = self.conn.open_bi();
                         tokio::spawn(async move {
                             coord
-                                .unbounded_send(CoordEvent::NewStreamRes(to, sid, uni.await))
+                                .unbounded_send(CoordEvent::NewStreamRes(to, sid, bi.await))
                                 .ok();
                         });
                     }
-                    IUni(sid, recv) => {
-                        if let Some(send) = self.new_streams.remove(&sid) {
+                    BiIn(sid, n_send, n_recv) => {
+                        if let Some((send, recv)) = self.new_streams.remove(&sid) {
                             let from = self.peer.clone();
                             tokio::spawn(async move {
                                 let mut write_stream = SymmetricallyFramed::new(
@@ -149,12 +149,14 @@ impl CoordChanInner {
                                     return;
                                 }
                                 let send = write_stream.into_inner();
+                                let recv = FramedRead::new(recv, LengthDelimitedCodec::new());
 
-                                // forward all messages from sender to receiver
-                                recv.map(|b| b.map(|bb| bb.freeze()))
-                                    .forward(send)
-                                    .await
-                                    .ok();
+                                // forward all messages in both directions
+                                let fw1 = n_recv.map(|b| b.map(|bb| bb.freeze())).forward(send);
+                                let fw2 = recv.map(|b| b.map(|bb| bb.freeze())).forward(n_send);
+                                let (sf, rf) = futures::future::join(fw1, fw2).await;
+                                sf.ok();
+                                rf.ok();
                             });
                         } else {
                             self.to_send.push_back(ControlMsg::NewStreamErr(sid));
@@ -171,13 +173,13 @@ impl CoordChanInner {
         false
     }
 
-    fn drive_iuni_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
+    fn drive_ibi_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut recvd = 0;
         loop {
-            let recv = match self.iuni.poll_next_unpin(cx) {
+            let (send, recv) = match self.ibi.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => Err(CoordChanError::EndOfUniStream),
-                Poll::Ready(Some(r)) => r.map_err(CoordChanError::AcceptUniStream),
+                Poll::Ready(None) => Err(CoordChanError::EndOfBiStream),
+                Poll::Ready(Some(r)) => r.map_err(CoordChanError::AcceptBiStream),
             }?;
             let sender = self.sender.clone();
             tokio::spawn(async move {
@@ -187,19 +189,22 @@ impl CoordChanInner {
                 );
                 let sid = match read_stream.try_next().await {
                     Err(e) => {
-                        tracing::warn!("drive_iuni_recv: {:?}", e);
+                        tracing::warn!("drive_ibi_recv: {:?}", e);
                         return;
                     }
                     Ok(msg) => match msg {
                         Some(sid) => sid,
                         None => {
-                            tracing::warn!("drive_iuni_recv: unexpected end of stream");
+                            tracing::warn!("drive_ibi_recv: unexpected end of stream");
                             return;
                         }
                     },
                 };
                 let recv = read_stream.into_inner();
-                sender.unbounded_send(CoordChanEvent::IUni(sid, recv)).ok();
+                let send = FramedWrite::new(send, LengthDelimitedCodec::new());
+                sender
+                    .unbounded_send(CoordChanEvent::BiIn(sid, send, recv))
+                    .ok();
             });
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -245,7 +250,7 @@ impl CoordChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
-        iuni: IncomingUniStreams,
+        ibi: IncomingBiStreams,
         peer: String,
         cert: Vec<u8>,
         coord: mpsc::UnboundedSender<CoordEvent>,
@@ -258,7 +263,7 @@ impl CoordChanRef {
             Self(Arc::new(Mutex::new(CoordChanInner {
                 conn,
                 ctrl,
-                iuni,
+                ibi,
                 peer,
                 cert,
                 coord,
@@ -295,7 +300,7 @@ impl Future for CoordChanDriver {
             if !inner.to_send.is_empty() || inner.flushing {
                 keep_going |= inner.drive_ctrl_send(cx)?;
             }
-            keep_going |= inner.drive_iuni_recv(cx)?;
+            keep_going |= inner.drive_ibi_recv(cx)?;
             if !keep_going {
                 break;
             }

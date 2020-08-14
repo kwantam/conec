@@ -8,19 +8,19 @@
 // except according to those terms.
 
 use crate::consts::MAX_LOOPS;
-use crate::types::InStream;
+use crate::types::{InStream, OutStream};
 
 use err_derive::Error;
 use futures::channel::oneshot;
 use futures::prelude::*;
-use quinn::{ConnectionError, IncomingUniStreams};
+use quinn::{ConnectionError, IncomingBiStreams};
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
-use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 ///! Error variant output by [ConnectingInStream] future
 #[derive(Debug, Error)]
@@ -37,7 +37,7 @@ pub enum InStreamError {
 }
 
 ///! Ok variant output by [ConnectingInStream] future
-pub type NewInStream = (String, u32, InStream);
+pub type NewInStream = (String, u32, OutStream, InStream);
 
 ///! An incoming stream that is currently connecting
 pub struct ConnectingInStream(oneshot::Receiver<Result<NewInStream, InStreamError>>);
@@ -60,20 +60,20 @@ impl Future for ConnectingInStream {
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
     ///! Transport unexpectedly stopped delivering new streams
-    #[error(display = "Unexpected end of Uni stream")]
-    EndOfUniStream,
+    #[error(display = "Unexpected end of Bi stream")]
+    EndOfBiStream,
     ///! Client's connection to Coordinator disappeared
     #[error(display = "Client is gone")]
     ClientClosed,
     ///! Error while accepting new stream from transport
-    #[error(display = "Accepting Uni stream: {:?}", _0)]
-    AcceptUniStream(#[source] ConnectionError),
+    #[error(display = "Accepting Bi stream: {:?}", _0)]
+    AcceptBiStream(#[source] ConnectionError),
 }
 
 pub(super) struct IncomingStreamsInner {
     client: Option<oneshot::Sender<()>>,
     bye: oneshot::Receiver<()>,
-    streams: IncomingUniStreams,
+    streams: IncomingBiStreams,
     incoming: VecDeque<ConnectingInStream>,
     ref_count: usize,
     driver: Option<Waker>,
@@ -90,10 +90,10 @@ impl IncomingStreamsInner {
 
         let mut recvd = 0;
         loop {
-            let recv = match self.streams.poll_next_unpin(cx) {
+            let (send, recv) = match self.streams.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => Err(IncomingStreamsError::EndOfUniStream),
-                Poll::Ready(Some(r)) => r.map_err(IncomingStreamsError::AcceptUniStream),
+                Poll::Ready(None) => Err(IncomingStreamsError::EndOfBiStream),
+                Poll::Ready(Some(r)) => r.map_err(IncomingStreamsError::AcceptBiStream),
             }?;
             let (sender, receiver) = oneshot::channel();
             tokio::spawn(async move {
@@ -115,7 +115,8 @@ impl IncomingStreamsInner {
                     },
                 };
                 let instream = read_stream.into_inner();
-                sender.send(Ok((peer, chanid, instream))).ok();
+                let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
+                sender.send(Ok((peer, chanid, outstream, instream))).ok();
             });
             self.incoming.push_back(ConnectingInStream(receiver));
             if let Some(task) = self.incoming_reader.take() {
@@ -165,7 +166,7 @@ impl IncomingStreamsRef {
     pub(super) fn new(
         client: oneshot::Sender<()>,
         bye: oneshot::Receiver<()>,
-        streams: IncomingUniStreams,
+        streams: IncomingBiStreams,
     ) -> Self {
         Self(Arc::new(Mutex::new(IncomingStreamsInner {
             client: Some(client),

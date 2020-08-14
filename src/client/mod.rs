@@ -115,12 +115,12 @@ impl Client {
         let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
-        let (mut conn, iuni) =
+        let (mut conn, mut ibi) =
             ConecConn::connect(&mut endpoint, &config.coord, config.addr, None).await?;
 
         // set up the control stream with the coordinator
         let ctrl = conn
-            .accept_ctrl(config.id, &clt_cert, &clt_key)
+            .accept_ctrl(config.id, &clt_cert, &clt_key, &mut ibi)
             .await
             .map_err(ClientError::AcceptCtrl)?;
 
@@ -132,7 +132,7 @@ impl Client {
 
         // set up the incoming streams listener
         let istrms = {
-            let inner = IncomingStreamsRef::new(i_client, i_bye, iuni);
+            let inner = IncomingStreamsRef::new(i_client, i_bye, ibi);
             let driver = IncomingStreamsDriver(inner.clone());
             tokio::spawn(async move { driver.await });
             IncomingStreams(inner)
@@ -160,8 +160,8 @@ impl Client {
     ///! Open a new proxied stream to another client with an explicit stream-id
     ///
     /// The `sid` argument must be different for every call to this function for a given Client object.
-    /// If mixing calls to this function with calls to [new_strema], avoid using sid larger than 1<<31:
-    /// those values are used automatically by that function.
+    /// If mixing calls to this function with calls to [new_stream](Client::new_stream), avoid using
+    /// `sid >= 1<<31`: those values are used automatically by that function.
     pub fn new_stream_with_sid(
         &self,
         to: String,

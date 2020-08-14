@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, OutStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream};
 use crate::util;
 
 use err_derive::Error;
@@ -21,7 +21,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
-use tokio_util::codec::{FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 ///! Error variant output by [ConnectingOutStream] future
 #[derive(Debug, Error)]
@@ -43,13 +43,13 @@ pub enum OutStreamError {
     Canceled(#[source] oneshot::Canceled),
 }
 
-type ConnectingOutStreamHandle = oneshot::Sender<Result<OutStream, OutStreamError>>;
+type ConnectingOutStreamHandle = oneshot::Sender<Result<(OutStream, InStream), OutStreamError>>;
 
 ///! An outgoing stream that is currently connecting
-pub struct ConnectingOutStream(oneshot::Receiver<Result<OutStream, OutStreamError>>);
+pub struct ConnectingOutStream(oneshot::Receiver<Result<(OutStream, InStream), OutStreamError>>);
 
 impl Future for ConnectingOutStream {
-    type Output = Result<OutStream, OutStreamError>;
+    type Output = Result<(OutStream, InStream), OutStreamError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let inner = &mut self.0;
@@ -143,11 +143,11 @@ impl ClientChanInner {
             match msg {
                 ControlMsg::NewStreamOk(sid) => {
                     let chan = self.get_new_stream(sid)?;
-                    let uni = self.conn.open_uni();
+                    let bi = self.conn.open_bi();
                     tokio::spawn(async move {
-                        // get the unidirectional stream
-                        let send = match uni.await {
-                            Ok(send) => send,
+                        // get the new streams
+                        let (send, recv) = match bi.await {
+                            Ok(sr) => sr,
                             Err(e) => {
                                 chan.send(Err(OutStreamError::OpenUni(e))).ok();
                                 return;
@@ -170,7 +170,8 @@ impl ClientChanInner {
 
                         // send resulting OutStream to the receiver
                         let outstream = write_stream.into_inner();
-                        chan.send(Ok(outstream)).ok();
+                        let instream = FramedRead::new(recv, LengthDelimitedCodec::new());
+                        chan.send(Ok((outstream, instream))).ok();
                     });
                     Ok(())
                 }
