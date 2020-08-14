@@ -29,9 +29,10 @@ use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
 use quinn::{
-    crypto::rustls::TLSError, CertificateChain, ClientConfigBuilder, Endpoint, EndpointError,
-    ServerConfigBuilder,
+    crypto::rustls::TLSError, Certificate, ClientConfigBuilder, Endpoint, EndpointError,
+    ParseError, ServerConfigBuilder,
 };
+use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
 
 ///! Client::new constructor errors
 #[derive(Debug, Error)]
@@ -54,6 +55,12 @@ pub enum ClientError {
     ///! Error setting up certificate chain
     #[error(display = "Certificate chain: {:?}", _0)]
     CertificateChain(#[source] TLSError),
+    ///! Error with client ephemeral key
+    #[error(display = "Ephemeral key: {:?}", _0)]
+    PrivateKey(#[error(from)] ring::error::KeyRejected),
+    ///! Error parsing client ephemeral cert
+    #[error(display = "Ephemeral cert: {:?}", _0)]
+    CertificateParse(#[source] ParseError),
 }
 
 ///! The Client end of a connection to the Coordinator
@@ -63,8 +70,8 @@ pub struct Client {
     endpoint: Endpoint,
     coord: ClientChan,
     ctr: u32,
-    pub(crate) _cert: CertificateChain,
-    pub(crate) _key: Vec<u8>,
+    pub(crate) _cert: Certificate,
+    pub(crate) _key: EcdsaKeyPair,
 }
 
 impl Client {
@@ -78,6 +85,8 @@ impl Client {
         };
         // unwrap is safe because gen_certs suceeded above
         let (cert, privkey, key) = config.cert_and_key.unwrap();
+        let clt_cert = Certificate::from_der(cert.iter().next().unwrap().as_ref())?;
+        let clt_key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &key)?;
         // build the client configuration
         let mut qcc = ClientConfigBuilder::default();
         qcc.protocols(ALPN_CONEC);
@@ -99,7 +108,7 @@ impl Client {
             if config.keylog {
                 qsc.enable_keylog();
             }
-            qsc.certificate(cert.clone(), privkey)?;
+            qsc.certificate(cert, privkey)?;
             // set server config on endpoint
             endpoint.listen(qsc.build());
         }
@@ -134,8 +143,8 @@ impl Client {
                 endpoint,
                 coord,
                 ctr: 1u32 << 31,
-                _cert: cert,
-                _key: key,
+                _cert: clt_cert,
+                _key: clt_key,
             },
             istrms,
         ))

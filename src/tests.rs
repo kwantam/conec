@@ -14,9 +14,7 @@ use bytes::Bytes;
 use futures::prelude::*;
 use quinn::Certificate;
 use ring::rand::SystemRandom;
-use ring::signature::{
-    EcdsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_ASN1_SIGNING,
-};
+use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, io};
@@ -247,12 +245,12 @@ fn test_client_signing() {
         assert_eq!(coord.num_clients(), 1);
 
         let cert = client._cert.clone();
-        let cert_bytes = cert.iter().next().unwrap().as_ref().to_vec();
-        let ringkp =
-            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &client._key).unwrap();
+        let cert_bytes = cert.as_der().to_vec();
+        let one_cert = Certificate::from_der(&cert_bytes[..]).unwrap();
+        assert_eq!(one_cert.as_der(), &cert_bytes[..]);
         let sig = {
             let rng = SystemRandom::new();
-            ringkp.sign(&rng, &cert_bytes).unwrap()
+            client._key.sign(&rng, &cert_bytes).unwrap()
         };
 
         let pk = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &cert_bytes[..]);

@@ -16,6 +16,7 @@ futures = "0.3"
 quinn = "0.6"
 rand = "0.7"
 rcgen = "0.8"
+ring = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "0.2", features = ["rt-core"] }
 tokio-serde = { version = "0.6", features = ["bincode"] }
@@ -26,5 +27,4 @@ webpki = "0.21"
 [dev-dependencies]
 anyhow = "1.0"
 directories-next = "1.0"
-ring = "0.16"
 x509-signature = "0.5"
