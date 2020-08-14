@@ -43,7 +43,7 @@ fn test_simple() {
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
         };
-        let port = coord.local_addr().unwrap().port();
+        let port = coord.local_addr().port();
 
         // start client
         let client = {
@@ -77,7 +77,7 @@ fn test_repeat_name() {
             coord_cfg.set_port(0);
             Coord::new(coord_cfg).await.unwrap()
         };
-        let port = coord.local_addr().unwrap().port();
+        let port = coord.local_addr().port();
 
         // start client
         let client_cfg = {
@@ -123,7 +123,7 @@ fn test_stream_uni() {
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
         };
-        let port = coord.local_addr().unwrap().port();
+        let port = coord.local_addr().port();
 
         // start client 1
         let (mut client1, _inc1) = {
@@ -182,7 +182,7 @@ fn test_stream_loopback() {
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
         };
-        let port = coord.local_addr().unwrap().port();
+        let port = coord.local_addr().port();
 
         // start client 1
         let (mut client, mut inc) = {
@@ -233,7 +233,7 @@ fn test_client_signing() {
             coord_cfg.set_port(0);
             Coord::new(coord_cfg).await.unwrap()
         };
-        let port = coord.local_addr().unwrap().port();
+        let port = coord.local_addr().port();
 
         // start client
         let (client, _inc) = {

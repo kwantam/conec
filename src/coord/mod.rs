@@ -152,13 +152,7 @@ impl CoordInner {
                             let driver = CoordChanDriver(inner.clone());
                             tokio::spawn(async move { driver.await });
 
-                            self.clients.insert(
-                                peer,
-                                CoordChan {
-                                    _inner: inner,
-                                    sender,
-                                },
-                            );
+                            self.clients.insert(peer, CoordChan { inner, sender });
                         }
                     }
                     ChanClose(client) => {
@@ -316,8 +310,9 @@ impl Coord {
     }
 
     ///! Return the local address that Coord is bound to
-    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
-        self.endpoint.local_addr()
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        // unwrap is safe because Coord always has a bound socket
+        self.endpoint.local_addr().unwrap()
     }
 }
 

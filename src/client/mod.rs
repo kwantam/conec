@@ -153,7 +153,11 @@ impl Client {
     /// The `sid` argument must be different for every call to this function for a given Client object.
     /// If mixing calls to this function with calls to [new_strema], avoid using sid larger than 1<<31:
     /// those values are used automatically by that function.
-    pub fn new_stream_with_sid(&self, to: String, sid: u32) -> Result<ConnectingOutStream, ClientChanError> {
+    pub fn new_stream_with_sid(
+        &self,
+        to: String,
+        sid: u32,
+    ) -> Result<ConnectingOutStream, ClientChanError> {
         self.coord.new_stream(to, sid)
     }
 

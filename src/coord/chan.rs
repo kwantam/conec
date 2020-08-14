@@ -319,7 +319,7 @@ impl Drop for CoordChanDriver {
 }
 
 pub(super) struct CoordChan {
-    pub(super) _inner: CoordChanRef,
+    pub(super) inner: CoordChanRef,
     pub(super) sender: mpsc::UnboundedSender<CoordChanEvent>,
 }
 
@@ -329,5 +329,11 @@ impl CoordChan {
         // and if the receiver disappeared then the driver must
         // have sent a ChanClose event to the Coord
         self.sender.unbounded_send(event).ok();
+    }
+
+    // for now
+    #[allow(dead_code)]
+    pub(super) fn remote_addr(&self) -> std::net::SocketAddr {
+        self.inner.lock().unwrap().conn.remote_addr()
     }
 }

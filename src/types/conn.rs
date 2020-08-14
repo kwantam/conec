@@ -184,4 +184,8 @@ impl ConecConn {
     pub(crate) fn open_uni(&mut self) -> OpenUni {
         self.connection.open_uni()
     }
+
+    pub(crate) fn remote_addr(&self) -> SocketAddr {
+        self.connection.remote_address()
+    }
 }
