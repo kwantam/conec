@@ -126,7 +126,7 @@ fn test_stream_uni() {
         let port = coord.local_addr().unwrap().port();
 
         // start client 1
-        let (client1, _inc1) = {
+        let (mut client1, _inc1) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert.clone());
             client_cfg.set_port(port);
@@ -146,7 +146,7 @@ fn test_stream_uni() {
 
         // open stream to client2
         let mut s12 = client1
-            .new_stream("client2".to_string(), 0)
+            .new_stream("client2".to_string())
             .unwrap()
             .await
             .unwrap();
@@ -185,7 +185,7 @@ fn test_stream_loopback() {
         let port = coord.local_addr().unwrap().port();
 
         // start client 1
-        let (client, mut inc) = {
+        let (mut client, mut inc) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
             client_cfg.set_ca(cert.clone());
             client_cfg.set_port(port);
@@ -195,13 +195,13 @@ fn test_stream_loopback() {
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
-        // open stream to client1
+        // open stream to client
         let mut s11 = client
-            .new_stream("client1".to_string(), 0)
+            .new_stream("client1".to_string())
             .unwrap()
             .await
             .unwrap();
-        // receive stream at client1
+        // receive stream at client
         let (sender, strmid, mut r11) = inc.next().await.unwrap().await.unwrap();
 
         let to_send = Bytes::from("loopback stream");

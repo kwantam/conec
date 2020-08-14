@@ -62,6 +62,7 @@ pub enum ClientError {
 pub struct Client {
     endpoint: Endpoint,
     coord: ClientChan,
+    ctr: u32,
     pub(crate) _cert: CertificateChain,
     pub(crate) _key: Vec<u8>,
 }
@@ -132,6 +133,7 @@ impl Client {
             Self {
                 endpoint,
                 coord,
+                ctr: 1u32 << 31,
                 _cert: cert,
                 _key: key,
             },
@@ -140,8 +142,19 @@ impl Client {
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator
-    pub fn new_stream(&self, to: String, cid: u32) -> Result<ConnectingOutStream, ClientChanError> {
-        self.coord.new_stream(to, cid)
+    pub fn new_stream(&mut self, to: String) -> Result<ConnectingOutStream, ClientChanError> {
+        let ctr = self.ctr;
+        self.ctr += 1;
+        self.coord.new_stream(to, ctr)
+    }
+
+    ///! Open a new proxied stream to another client with an explicit stream-id
+    ///
+    /// The `sid` argument must be different for every call to this function for a given Client object.
+    /// If mixing calls to this function with calls to [new_strema], avoid using sid larger than 1<<31:
+    /// those values are used automatically by that function.
+    pub fn new_stream_with_sid(&self, to: String, sid: u32) -> Result<ConnectingOutStream, ClientChanError> {
+        self.coord.new_stream(to, sid)
     }
 
     ///! Return the local address that Client is bound to
