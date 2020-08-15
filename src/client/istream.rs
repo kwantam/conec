@@ -37,7 +37,7 @@ pub enum InStreamError {
 }
 
 ///! Ok variant output by [ConnectingInStream] future
-pub type NewInStream = (String, u32, OutStream, InStream);
+pub type NewInStream = (Option<String>, u32, OutStream, InStream);
 
 ///! An incoming stream that is currently connecting
 pub struct ConnectingInStream(oneshot::Receiver<Result<NewInStream, InStreamError>>);
@@ -99,7 +99,7 @@ impl IncomingStreamsInner {
             tokio::spawn(async move {
                 let mut read_stream = SymmetricallyFramed::new(
                     FramedRead::new(recv, LengthDelimitedCodec::new()),
-                    SymmetricalBincode::<(String, u32)>::default(),
+                    SymmetricalBincode::<(Option<String>, u32)>::default(),
                 );
                 let (peer, chanid) = match read_stream.try_next().await {
                     Err(e) => {

@@ -7,8 +7,9 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use super::StreamPeer;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream, StreamTo};
 use crate::util;
 
 use err_derive::Error;
@@ -35,9 +36,9 @@ pub enum OutStreamError {
     ///! Failed to flush initial message
     #[error(display = "Flushing init message: {:?}", _0)]
     Flush(#[error(source, no_from)] io::Error),
-    ///! Failed to open unidirectional channel
-    #[error(display = "Opening unidirectional channel: {:?}", _0)]
-    OpenUni(#[source] ConnectionError),
+    ///! Failed to open bidirectional channel
+    #[error(display = "Opening bidirectional channel: {:?}", _0)]
+    OpenBi(#[source] ConnectionError),
     ///! Opening channel was canceled
     #[error(display = "Outgoing connection canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
@@ -111,6 +112,39 @@ impl ClientChanInner {
         }
     }
 
+    fn new_stream(&mut self, chan: ConnectingOutStreamHandle, sid: StreamTo) {
+        let bi = self.conn.open_bi();
+        tokio::spawn(async move {
+            // get the new streams
+            let (send, recv) = match bi.await {
+                Ok(sr) => sr,
+                Err(e) => {
+                    chan.send(Err(OutStreamError::OpenBi(e))).ok();
+                    return;
+                }
+            };
+
+            // write sid to it
+            let mut write_stream = SymmetricallyFramed::new(
+                FramedWrite::new(send, LengthDelimitedCodec::new()),
+                SymmetricalBincode::<StreamTo>::default(),
+                );
+            if let Err(e) = write_stream.send(sid).await {
+                chan.send(Err(OutStreamError::InitMsg(e))).ok();
+                return;
+            }
+            if let Err(e) = write_stream.flush().await {
+                chan.send(Err(OutStreamError::Flush(e))).ok();
+                return;
+            };
+
+            // send resulting OutStream to the receiver
+            let outstream = write_stream.into_inner();
+            let instream = FramedRead::new(recv, LengthDelimitedCodec::new());
+            chan.send(Ok((outstream, instream))).ok();
+        });
+    }
+
     fn handle_events(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
         match self.incs_bye_in.poll_unpin(cx) {
             Poll::Pending => Ok(()),
@@ -143,36 +177,8 @@ impl ClientChanInner {
             match msg {
                 ControlMsg::NewStreamOk(sid) => {
                     let chan = self.get_new_stream(sid)?;
-                    let bi = self.conn.open_bi();
-                    tokio::spawn(async move {
-                        // get the new streams
-                        let (send, recv) = match bi.await {
-                            Ok(sr) => sr,
-                            Err(e) => {
-                                chan.send(Err(OutStreamError::OpenUni(e))).ok();
-                                return;
-                            }
-                        };
-
-                        // write sid to it
-                        let mut write_stream = SymmetricallyFramed::new(
-                            FramedWrite::new(send, LengthDelimitedCodec::new()),
-                            SymmetricalBincode::<u32>::default(),
-                        );
-                        if let Err(e) = write_stream.send(sid).await {
-                            chan.send(Err(OutStreamError::InitMsg(e))).ok();
-                            return;
-                        }
-                        if let Err(e) = write_stream.flush().await {
-                            chan.send(Err(OutStreamError::Flush(e))).ok();
-                            return;
-                        };
-
-                        // send resulting OutStream to the receiver
-                        let outstream = write_stream.into_inner();
-                        let instream = FramedRead::new(recv, LengthDelimitedCodec::new());
-                        chan.send(Ok((outstream, instream))).ok();
-                    });
+                    let sid = StreamTo::Client(sid);
+                    self.new_stream(chan, sid);
                     Ok(())
                 }
                 ControlMsg::NewStreamErr(sid) => {
@@ -300,7 +306,7 @@ pub(super) struct ClientChan(pub(super) ClientChanRef);
 impl ClientChan {
     pub(super) fn new_stream(
         &self,
-        to: String,
+        to: StreamPeer,
         sid: u32,
     ) -> Result<ConnectingOutStream, ClientChanError> {
         // the new stream future is a channel that will contain the resulting stream
@@ -313,11 +319,16 @@ impl ClientChan {
         }
 
         // send the coordinator a request and record the send side of the channel
-        inner.to_send.push_back(ControlMsg::NewStreamReq(to, sid));
-        inner.new_streams.insert(sid, Some(sender));
-
-        // make sure the driver wakes up
-        inner.wake();
+        if to.is_coord() {
+            let sid = StreamTo::Coord(sid);
+            inner.new_stream(sender, sid);
+        } else {
+            inner
+                .to_send
+                .push_back(ControlMsg::NewStreamReq(to.into_id().unwrap(), sid));
+            inner.new_streams.insert(sid, Some(sender));
+            inner.wake();
+        }
 
         Ok(ConnectingOutStream(receiver))
     }

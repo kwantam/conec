@@ -9,7 +9,7 @@
 
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream};
+use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream, StreamTo};
 use crate::util;
 
 use err_derive::Error;
@@ -23,6 +23,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+
+///! Ok variant output by [ConnectingInStream] future
+pub type NewInStream = (String, u32, OutStream, InStream);
 
 ///! Coordinator channel driver errors
 #[derive(Debug, Error)]
@@ -48,6 +51,12 @@ pub enum CoordChanError {
     ///! Error while accepting new stream from transport
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
+    ///! Error while opening new transport stream
+    #[error(display = "Opening Bi stream: {:?}", _0)]
+    OpenBiStream(#[error(no_from, source)] ConnectionError),
+    ///! Error initializing BiDi stream
+    #[error(display = "Initializing Bi stream: {:?}", _0)]
+    InitStream(#[source] io::Error),
 }
 
 pub(super) struct CoordChanInner {
@@ -64,16 +73,33 @@ pub(super) struct CoordChanInner {
     to_send: VecDeque<ControlMsg>,
     flushing: bool,
     new_streams: HashMap<u32, (SendStream, RecvStream)>,
+    is_sender: mpsc::UnboundedSender<NewInStream>,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum CoordChanEvent {
     NSErr(u32),
     NSReq(String, u32),
     NSRes(u32, Result<(SendStream, RecvStream), ConnectionError>),
-    BiIn(u32, OutStream, InStream),
+    BiIn(StreamTo, OutStream, InStream),
 }
 
 impl CoordChanInner {
+    async fn stream_init(
+        send: SendStream,
+        peer: Option<String>,
+        sid: u32,
+    ) -> Result<OutStream, CoordChanError> {
+        let mut write_stream = SymmetricallyFramed::new(
+            FramedWrite::new(send, LengthDelimitedCodec::new()),
+            SymmetricalBincode::<(Option<String>, u32)>::default(),
+        );
+        // send (from, sid) and flush
+        write_stream.send((peer, sid)).await?;
+        write_stream.flush().await?;
+        Ok(write_stream.into_inner())
+    }
+
     // read the next message from the recv channel
     fn drive_ctrl_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut recvd = 0;
@@ -116,9 +142,9 @@ impl CoordChanInner {
                         Err(_) => {
                             self.to_send.push_back(ControlMsg::NewStreamErr(sid));
                         }
-                        Ok((send, recv)) => {
+                        Ok(send_recv) => {
                             self.to_send.push_back(ControlMsg::NewStreamOk(sid));
-                            self.new_streams.insert(sid, (send, recv));
+                            self.new_streams.insert(sid, send_recv);
                         }
                     },
                     NSReq(to, sid) => {
@@ -130,36 +156,34 @@ impl CoordChanInner {
                                 .ok();
                         });
                     }
-                    BiIn(sid, n_send, n_recv) => {
-                        if let Some((send, recv)) = self.new_streams.remove(&sid) {
-                            let from = self.peer.clone();
-                            tokio::spawn(async move {
-                                let mut write_stream = SymmetricallyFramed::new(
-                                    FramedWrite::new(send, LengthDelimitedCodec::new()),
-                                    SymmetricalBincode::<(String, u32)>::default(),
-                                );
+                    BiIn(sid, n_send, n_recv) => match sid {
+                        StreamTo::Client(sid) => {
+                            if let Some((send, recv)) = self.new_streams.remove(&sid) {
+                                let from = self.peer.clone();
+                                tokio::spawn(async move {
+                                    let send = match Self::stream_init(send, Some(from), sid).await {
+                                        Ok(send) => send,
+                                        Err(_) => {
+                                            return;
+                                        }
+                                    };
+                                    let recv = FramedRead::new(recv, LengthDelimitedCodec::new());
 
-                                // send (from, sid) and flush
-                                if write_stream.send((from, sid)).await.is_err() {
-                                    return;
-                                }
-                                if write_stream.flush().await.is_err() {
-                                    return;
-                                }
-                                let send = write_stream.into_inner();
-                                let recv = FramedRead::new(recv, LengthDelimitedCodec::new());
-
-                                // forward all messages in both directions
-                                let fw1 = n_recv.map(|b| b.map(|bb| bb.freeze())).forward(send);
-                                let fw2 = recv.map(|b| b.map(|bb| bb.freeze())).forward(n_send);
-                                let (sf, rf) = futures::future::join(fw1, fw2).await;
-                                sf.ok();
-                                rf.ok();
-                            });
-                        } else {
-                            self.to_send.push_back(ControlMsg::NewStreamErr(sid));
-                        }
-                    }
+                                    // forward all messages in both directions
+                                    let fw1 = n_recv.map(|b| b.map(|bb| bb.freeze())).forward(send);
+                                    let fw2 = recv.map(|b| b.map(|bb| bb.freeze())).forward(n_send);
+                                    let (sf, rf) = futures::future::join(fw1, fw2).await;
+                                    sf.ok();
+                                    rf.ok();
+                                });
+                            } else {
+                                self.to_send.push_back(ControlMsg::NewStreamErr(sid));
+                            }
+                        },
+                        StreamTo::Coord(sid) => {
+                            self.is_sender.unbounded_send((self.peer.clone(), sid, n_send, n_recv)).ok();
+                        },
+                    },
                 },
                 _ => break,
             }
@@ -183,7 +207,7 @@ impl CoordChanInner {
             tokio::spawn(async move {
                 let mut read_stream = SymmetricallyFramed::new(
                     FramedRead::new(recv, LengthDelimitedCodec::new()),
-                    SymmetricalBincode::<u32>::default(),
+                    SymmetricalBincode::<StreamTo>::default(),
                 );
                 let sid = match read_stream.try_next().await {
                     Err(e) => {
@@ -251,6 +275,7 @@ impl CoordChanRef {
         ibi: IncomingBiStreams,
         peer: String,
         coord: mpsc::UnboundedSender<CoordEvent>,
+        is_sender: mpsc::UnboundedSender<NewInStream>,
     ) -> (Self, mpsc::UnboundedSender<CoordChanEvent>) {
         let mut to_send = VecDeque::new();
         // send hello at startup
@@ -271,6 +296,7 @@ impl CoordChanRef {
                 to_send,
                 flushing: false,
                 new_streams: HashMap::new(),
+                is_sender,
             }))),
             sender,
         )

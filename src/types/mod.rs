@@ -18,6 +18,7 @@ pub(crate) use ctrlstream::CtrlStream;
 pub use ctrlstream::{ControlMsg, CtrlStreamError};
 
 use quinn::{RecvStream, SendStream};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
@@ -54,4 +55,10 @@ impl ConecConnAddr {
             Self::Sockaddr(ref s) => Some(s),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) enum StreamTo {
+    Client(u32),
+    Coord(u32),
 }

@@ -13,7 +13,7 @@ This module defines the Client entity and associated functionality.
 See [library documentation](../index.html) for more info on how to instantiate a Client.
 */
 
-mod chan;
+pub(crate) mod chan;
 pub(crate) mod config;
 mod istream;
 mod tls;
@@ -56,6 +56,46 @@ pub enum ClientError {
     ///! Error parsing client ephemeral cert
     #[error(display = "Ephemeral cert: {:?}", _0)]
     CertificateParse(#[source] ParseError),
+    ///! Error starting new stream
+    #[error(display = "Starting new stream: {:?}", _0)]
+    NewStream(#[source] ClientChanError),
+}
+
+///! The target of a call to [Client::new_stream]: either the coordinator or another client.
+pub enum StreamPeer {
+    /// The other endpoint is the coordinator
+    Coord,
+    /// The other endpoint is a client
+    Client(String),
+}
+
+impl StreamPeer {
+    fn is_coord(&self) -> bool {
+        matches!(self, Self::Coord)
+    }
+
+    fn into_id(self) -> Option<String> {
+        match self {
+            Self::Coord => None,
+            Self::Client(id) => Some(id),
+        }
+    }
+}
+
+impl From<String> for StreamPeer {
+    fn from(s: String) -> Self {
+        Self::Client(s)
+    }
+}
+
+impl From<Option<String>> for StreamPeer {
+    fn from(s: Option<String>) -> Self {
+        if let Some(s) = s {
+            Self::Client(s)
+        } else {
+            Self::Coord
+        }
+    }
 }
 
 ///! The Client end of a connection to the Coordinator
@@ -137,10 +177,13 @@ impl Client {
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator
-    pub fn new_stream(&mut self, to: String) -> Result<ConnectingOutStream, ClientChanError> {
+    pub fn new_stream<T: Into<StreamPeer>>(
+        &mut self,
+        to: T,
+    ) -> Result<ConnectingOutStream, ClientError> {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.coord.new_stream(to, ctr)
+        Ok(self.coord.new_stream(to.into(), ctr)?)
     }
 
     ///! Open a new proxied stream to another client with an explicit stream-id
@@ -148,12 +191,12 @@ impl Client {
     /// The `sid` argument must be different for every call to this function for a given Client object.
     /// If mixing calls to this function with calls to [new_stream](Client::new_stream), avoid using
     /// `sid >= 1<<31`: those values are used automatically by that function.
-    pub fn new_stream_with_sid(
+    pub fn new_stream_with_sid<T: Into<StreamPeer>>(
         &self,
-        to: String,
+        to: T,
         sid: u32,
-    ) -> Result<ConnectingOutStream, ClientChanError> {
-        self.coord.new_stream(to, sid)
+    ) -> Result<ConnectingOutStream, ClientError> {
+        Ok(self.coord.new_stream(to.into(), sid)?)
     }
 
     ///! Return the local address that Client is bound to

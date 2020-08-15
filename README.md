@@ -73,8 +73,8 @@ abstraction:
     - [x] Client authentication via pubkeys
         - right now, client connects with ephemeral self-signed cert. once we
           add client-to-client connections, coord will pass that cert to client.
-    - [ ] direct Client-to-Client channels
-    - [ ] direct Client <-> Coord streams
+    - [x] direct Client <-> Coord streams
+    - [ ] direct Client <-> Client channels
     - [ ] automagically pick client-to-client vs proxied streams
     - [ ] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
@@ -87,7 +87,6 @@ abstraction:
     - [x] better Client naming (name by pubkey? but only if not ephemeral...)
         - no. eventually, can enforce naming policy by using client cert CA at coord
     - [x] Client <-> Coord streams? (decision: yes)
-        - this seems like it should be quite easy to handle
     - [x] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg? (decision: no)
     - [x] switch from String to Bytes where possible to reduce copying?
         - decision: no: atomics are potentially worse than copies for <= 1kB

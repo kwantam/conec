@@ -20,6 +20,7 @@ mod tls;
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
+pub use chan::{CoordChanError, NewInStream};
 use config::CoordConfig;
 
 use err_derive::Error;
@@ -34,6 +35,9 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio::task::{JoinError, JoinHandle};
+
+///! A [Stream] of incoming data streams from Clients.
+pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
 ///! Coordinator constructor and driver errors
 #[derive(Debug, Error)]
@@ -77,6 +81,7 @@ struct CoordInner {
     ref_count: usize,
     sender: mpsc::UnboundedSender<CoordEvent>,
     events: mpsc::UnboundedReceiver<CoordEvent>,
+    is_sender: mpsc::UnboundedSender<NewInStream>,
 }
 
 impl CoordInner {
@@ -149,6 +154,7 @@ impl CoordInner {
                                 ibi,
                                 peer.clone(),
                                 self.sender.clone(),
+                                self.is_sender.clone(),
                             );
 
                             // spawn channel driver
@@ -195,16 +201,21 @@ impl CoordInner {
 struct CoordRef(Arc<Mutex<CoordInner>>);
 
 impl CoordRef {
-    fn new(incoming: Incoming) -> Self {
+    fn new(incoming: Incoming) -> (Self, IncomingStreams) {
         let (sender, events) = mpsc::unbounded();
-        Self(Arc::new(Mutex::new(CoordInner {
-            incoming,
-            clients: HashMap::new(),
-            driver: None,
-            ref_count: 0,
-            sender,
-            events,
-        })))
+        let (is_sender, incoming_streams) = mpsc::unbounded();
+        (
+            Self(Arc::new(Mutex::new(CoordInner {
+                incoming,
+                clients: HashMap::new(),
+                driver: None,
+                ref_count: 0,
+                sender,
+                events,
+                is_sender,
+            }))),
+            incoming_streams,
+        )
     }
 }
 
@@ -298,7 +309,7 @@ impl Coord {
     }
 
     ///! Construct a new coordinator and listen for Clients
-    pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
+    pub async fn new(config: CoordConfig) -> Result<(Self, IncomingStreams), CoordError> {
         // build configuration
         let (cert, key) = config.cert_and_key;
         let qsc = Self::build_config(config.stateless_retry, config.keylog, cert, key)?;
@@ -308,15 +319,18 @@ impl Coord {
         endpoint.listen(qsc);
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        let inner = CoordRef::new(incoming);
+        let (inner, incoming_streams) = CoordRef::new(incoming);
         let driver = CoordDriver(inner.clone());
         let driver_handle = tokio::spawn(async move { driver.await });
 
-        Ok(Self {
-            endpoint,
-            inner,
-            driver_handle,
-        })
+        Ok((
+            Self {
+                endpoint,
+                inner,
+                driver_handle,
+            },
+            incoming_streams,
+        ))
     }
 
     ///! Report number of connected clients
