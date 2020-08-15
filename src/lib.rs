@@ -54,11 +54,15 @@ a future that, when forced, starts up the Coordinator.
 
 ```ignore
 let coord = Coord::new(coord_cfg).await.unwrap();
+coord.await
 ```
 
 The Coord constructor launches driver threads in the background.
 These threads will run until the Coord struct is dropped and all
 clients have disconnected.
+
+Coord is a future that returns only if an error occurs. It is *not*
+necessary to await this future for the coordinator to run.
 
 ## Client
 
@@ -67,7 +71,7 @@ To start a Client, first build a [ClientConfig]. For example,
 ```
 # use conec::ClientConfig;
 let mut client_cfg =
-    ClientConfig::new("itme".to_string(), "coord.conec.example.com".to_string());
+    ClientConfig::new("client1".to_string(), "coord.conec.example.com".to_string());
 client_cfg.set_port(1337);
 ```
 
@@ -85,25 +89,25 @@ Once your Client has connected to its Coordinator, it can set up
 data streams with other Clients and send data on them:
 
 ```ignore
-let to_you = client
-    .new_stream("ityou".to_string(), 0)
+let (mut to_client2, _from_client2) = client
+    .new_stream("client2".to_string(), 0)
     .unwrap()
     .await
     .unwrap();
-to_you.send(Bytes::from("hi there")).await.unwrap();
+to_client2.send(Bytes::from("hi there")).await.unwrap();
 ```
 
 The receiving client first accepts the stream and then reads data from it:
 
 ```ignore
-let (peer, strmid, mut from_me) = istreams
+let (peer, strmid, _to_client1, mut from_client1) = istreams
     .next()
     .await
     .unwrap()
     .await
     .unwrap();
 println!("Got new stream with id {} from peer {}", strmid, peer);
-let rec = from_me
+let rec = from_client1
     .try_next()
     .await?
     .unwrap();
