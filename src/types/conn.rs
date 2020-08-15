@@ -8,20 +8,16 @@
 // except according to those terms.
 
 use super::{ControlMsg, CtrlStream, CtrlStreamError};
-use crate::consts::VERSION;
 use crate::types::ConecConnAddr;
 
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    Certificate, CertificateChain, ClientConfig, ConnectError, Connecting, Connection,
-    ConnectionError, Endpoint, IncomingBiStreams, NewConnection, OpenBi,
+    ClientConfig, ConnectError, Connecting, Connection, ConnectionError, Endpoint,
+    IncomingBiStreams, NewConnection, OpenBi,
 };
-use rand::{thread_rng, Rng};
-use ring::signature::EcdsaKeyPair;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::time::SystemTime;
 
 #[derive(Debug, Error)]
 pub enum ConecConnError {
@@ -37,14 +33,12 @@ pub enum ConecConnError {
     EndOfBidiStream,
     #[error(display = "Accepting BiDi stream: {:?}", _0)]
     AcceptBidiStream(#[error(source, no_from)] ConnectionError),
-    #[error(display = "No certificate chain available")]
-    CertificateChain,
     #[error(display = "send_hello error: {:?}", _0)]
     SendHello(#[error(source, no_from)] CtrlStreamError),
     #[error(display = "Opening BiDi stream: {:?}", _0)]
     OpenBidiStream(#[error(source, no_from)] ConnectionError),
-    #[error(display = "Sending nonce: {:?}", _0)]
-    NonceSend(#[error(source, no_from)] CtrlStreamError),
+    #[error(display = "Sending version: {:?}", _0)]
+    VersionSend(#[error(source, no_from)] CtrlStreamError),
     #[error(display = "Receiving hello: {:?}", _0)]
     RecvHello(#[error(source, no_from)] CtrlStreamError),
 }
@@ -111,8 +105,6 @@ impl ConecConn {
     pub(crate) async fn accept_ctrl(
         &mut self,
         id: String,
-        cert: &Certificate,
-        key: &EcdsaKeyPair,
         ibi: &mut IncomingBiStreams,
     ) -> Result<CtrlStream, ConecConnError> {
         let (cc_send, cc_recv) = ibi
@@ -122,22 +114,14 @@ impl ConecConn {
             .map_err(ConecConnError::AcceptBidiStream)?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
-        let srv_certs = self
-            .0
-            .authentication_data()
-            .peer_certificates
-            .ok_or(ConecConnError::CertificateChain)?;
         ctrl_stream
-            .send_hello(id, srv_certs, cert, key)
+            .send_hello(id)
             .await
             .map_err(ConecConnError::SendHello)?;
         Ok(ctrl_stream)
     }
 
-    pub(crate) async fn connect_ctrl(
-        &mut self,
-        certs: CertificateChain,
-    ) -> Result<(CtrlStream, String, Vec<u8>), ConecConnError> {
+    pub(crate) async fn connect_ctrl(&mut self) -> Result<(CtrlStream, String), ConecConnError> {
         // open a new control stream to newly connected client
         let (cc_send, cc_recv) = self
             .0
@@ -146,32 +130,15 @@ impl ConecConn {
             .map_err(ConecConnError::OpenBidiStream)?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
-        // compute a nonce and send it to the client
-        let nonce = {
-            // version string
-            let mut tmp = VERSION.to_string();
-            // remote address
-            tmp += &self.remote_addr().to_string();
-            tmp += "::";
-            // time
-            tmp += &SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("fatal clock error (should never happen)")
-                .as_nanos()
-                .to_string();
-            tmp += "::";
-            // randomness
-            tmp += &thread_rng().gen::<u128>().to_string();
-            tmp
-        };
         ctrl_stream
-            .send_nonce(nonce.clone())
+            .send_version()
             .await
-            .map_err(ConecConnError::NonceSend)?;
+            .map_err(ConecConnError::VersionSend)?;
 
-        // expect the client's hello back, otherwise try to send client an error
-        match ctrl_stream.recv_hello(&nonce, certs).await {
-            Ok((peer, cert)) => Ok((ctrl_stream, peer, cert)),
+        // expect the client's hello back, check cert name, otherwise try to send client an error
+        let peer_certs = self.0.authentication_data().peer_certificates;
+        match ctrl_stream.recv_hello(peer_certs).await {
+            Ok(peer) => Ok((ctrl_stream, peer)),
             Err(e) => {
                 ctrl_stream
                     .send(ControlMsg::HelloError(format!("{:?}", e)))

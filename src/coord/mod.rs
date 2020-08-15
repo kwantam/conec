@@ -15,6 +15,7 @@ See [library documentation](../index.html) for more info on how to instantiate a
 
 mod chan;
 pub(crate) mod config;
+mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
@@ -26,7 +27,7 @@ use futures::channel::mpsc;
 use futures::prelude::*;
 use quinn::{
     crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
-    IncomingBiStreams, RecvStream, SendStream, ServerConfigBuilder,
+    IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig, ServerConfigBuilder,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -58,7 +59,7 @@ pub enum CoordError {
 }
 
 enum CoordEvent {
-    Accepted(ConecConn, CtrlStream, IncomingBiStreams, String, Vec<u8>),
+    Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
     AcceptError(CoordError),
     ChanClose(String),
     NewStreamReq(String, String, u32),
@@ -71,7 +72,6 @@ enum CoordEvent {
 
 struct CoordInner {
     incoming: Incoming,
-    certs: CertificateChain,
     clients: HashMap<String, CoordChan>,
     driver: Option<Waker>,
     ref_count: usize,
@@ -89,7 +89,6 @@ impl CoordInner {
                 Poll::Ready(None) => Err(CoordError::EndOfIncomingStream),
                 Poll::Ready(Some(incoming)) => {
                     let sender = self.sender.clone();
-                    let certs = self.certs.clone();
                     tokio::spawn(async move {
                         use CoordError::*;
                         use CoordEvent::*;
@@ -100,7 +99,7 @@ impl CoordInner {
                             }
                             Ok(conn) => ConecConn::new(conn),
                         };
-                        let (ctrl, peer, cert) = match conn.connect_ctrl(certs).await {
+                        let (ctrl, peer) = match conn.connect_ctrl().await {
                             Err(e) => {
                                 sender.unbounded_send(AcceptError(Control(e))).unwrap();
                                 return;
@@ -108,7 +107,7 @@ impl CoordInner {
                             Ok(ctrl_peer) => ctrl_peer,
                         };
                         sender
-                            .unbounded_send(Accepted(conn, ctrl, ibi, peer, cert))
+                            .unbounded_send(Accepted(conn, ctrl, ibi, peer))
                             .unwrap();
                     });
                     Ok(())
@@ -132,7 +131,7 @@ impl CoordInner {
                     AcceptError(e) => {
                         tracing::warn!("got AcceptError: {}", e);
                     }
-                    Accepted(conn, ctrl, ibi, peer, cert) => {
+                    Accepted(conn, ctrl, ibi, peer) => {
                         if self.clients.get(&peer).is_some() {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
@@ -149,7 +148,6 @@ impl CoordInner {
                                 ctrl,
                                 ibi,
                                 peer.clone(),
-                                cert,
                                 self.sender.clone(),
                             );
 
@@ -197,11 +195,10 @@ impl CoordInner {
 struct CoordRef(Arc<Mutex<CoordInner>>);
 
 impl CoordRef {
-    fn new(incoming: Incoming, certs: CertificateChain) -> Self {
+    fn new(incoming: Incoming) -> Self {
         let (sender, events) = mpsc::unbounded();
         Self(Arc::new(Mutex::new(CoordInner {
             incoming,
-            certs,
             clients: HashMap::new(),
             driver: None,
             ref_count: 0,
@@ -280,24 +277,38 @@ pub struct Coord {
 }
 
 impl Coord {
+    pub(crate) fn build_config(
+        stateless_retry: bool,
+        keylog: bool,
+        certs: CertificateChain,
+        key: PrivateKey,
+    ) -> Result<ServerConfig, TLSError> {
+        let mut qscb = ServerConfigBuilder::new({
+            let mut qsc = ServerConfig::default();
+            qsc.crypto = tls::build_rustls_server_config();
+            qsc
+        });
+        qscb.protocols(ALPN_CONEC);
+        qscb.use_stateless_retry(stateless_retry);
+        if keylog {
+            qscb.enable_keylog();
+        }
+        qscb.certificate(certs, key)?;
+        Ok(qscb.build())
+    }
+
     ///! Construct a new coordinator and listen for Clients
     pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
         // build configuration
-        let mut qsc = ServerConfigBuilder::default();
-        qsc.protocols(ALPN_CONEC);
-        qsc.use_stateless_retry(config.stateless_retry);
-        if config.keylog {
-            qsc.enable_keylog();
-        }
         let (cert, key) = config.cert_and_key;
-        qsc.certificate(cert.clone(), key)?;
+        let qsc = Self::build_config(config.stateless_retry, config.keylog, cert, key)?;
 
         // build QUIC endpoint
         let mut endpoint = Endpoint::builder();
-        endpoint.listen(qsc.build());
+        endpoint.listen(qsc);
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        let inner = CoordRef::new(incoming, cert);
+        let inner = CoordRef::new(incoming);
         let driver = CoordDriver(inner.clone());
         let driver_handle = tokio::spawn(async move { driver.await });
 

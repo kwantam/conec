@@ -12,24 +12,20 @@ use crate::consts::VERSION;
 
 use err_derive::Error;
 use futures::prelude::*;
-use quinn::{Certificate, CertificateChain, RecvStream, SendStream, WriteError};
-use ring::{error::Unspecified, rand::SystemRandom, signature::EcdsaKeyPair};
+use quinn::{CertificateChain, RecvStream, SendStream, WriteError};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use webpki::{
-    trust_anchor_util::cert_der_as_trust_anchor, DNSNameRef, EndEntityCert, TLSServerTrustAnchors,
-    ECDSA_P256_SHA256,
-};
+use webpki::{DNSNameRef, EndEntityCert};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ControlMsg {
-    CoNonce(String),
+    CoVersion(String),
     CoHello,
-    ClHello(String, Vec<u8>, Vec<u8>),
+    ClHello(String),
     HelloError(String),
     NewStreamReq(String, u32),
     NewStreamOk(u32),
@@ -38,8 +34,8 @@ pub enum ControlMsg {
 
 #[derive(Debug, Error)]
 pub enum CtrlStreamError {
-    #[error(display = "Recv CoNonce: {:?}", _0)]
-    NonceRecv(#[error(source, no_from)] io::Error),
+    #[error(display = "Recv CoVersion: {:?}", _0)]
+    VersionRecv(#[error(source, no_from)] io::Error),
     #[error(display = "Unexpected end of control stream")]
     EndOfCtrlStream,
     #[error(display = "Wrong message: got {:?}, expected {:?}", _0, _1)]
@@ -52,24 +48,20 @@ pub enum CtrlStreamError {
     SendClHello(#[error(source, no_from)] io::Error),
     #[error(display = "Recv CoHello: {:?}", _0)]
     RecvCoHello(#[error(source, no_from)] io::Error),
-    #[error(display = "Send CoHello: {:?}", _0)]
-    SendCoHello(#[error(source, no_from)] io::Error),
     #[error(display = "HelloError from peer: {:?}", _0)]
     PeerHelloError(String),
-    #[error(display = "Send CoNonce: {:?}", _0)]
-    NonceSend(#[error(source, no_from)] io::Error),
-    #[error(display = "Bad client auth message")]
-    BadClientAuth(#[error(source, no_from)] webpki::Error),
+    #[error(display = "Send CoVersion: {:?}", _0)]
+    VersionSend(#[error(source, no_from)] io::Error),
     #[error(display = "Sink flush: {:?}", _0)]
     SinkFlush(#[error(source, no_from)] io::Error),
     #[error(display = "Sink finish: {:?}", _0)]
     SinkFinish(#[error(source, no_from)] WriteError),
-    #[error(display = "Signing error: {:?}", _0)]
-    SignNonce(#[error(from)] Unspecified),
-    #[error(display = "Parsing client's cert: {:?}", _0)]
-    ParseCert(#[source] webpki::Error),
-    #[error(display = "Invalid client name: {:?}", _0)]
-    InvalidName(#[source] webpki::InvalidDNSNameError),
+    #[error(display = "No certificate chain available")]
+    CertificateChain,
+    #[error(display = "Client certificate does not match name")]
+    ClientCertName(#[source] webpki::Error),
+    #[error(display = "Bad client auth message")]
+    ClientName(#[source] webpki::InvalidDNSNameError),
 }
 
 type CtrlRecvStream = SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
@@ -94,38 +86,23 @@ impl CtrlStream {
         }
     }
 
-    pub(super) async fn send_hello(
-        &mut self,
-        id: String,
-        srv_certs: CertificateChain,
-        cert: &Certificate,
-        key: &EcdsaKeyPair,
-    ) -> Result<(), CtrlStreamError> {
+    pub(super) async fn send_hello(&mut self, id: String) -> Result<(), CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
 
-        // first, get the nonce from the server
-        let nonce = match self.try_next().await.map_err(NonceRecv)? {
-            Some(CoNonce(n)) => Ok(n),
-            Some(msg) => Err(WrongMessage(msg, CoNonce("".to_string()))),
+        // first, get the version from the server
+        let version = match self.try_next().await.map_err(VersionRecv)? {
+            Some(CoVersion(n)) => Ok(n),
+            Some(msg) => Err(WrongMessage(msg, CoVersion("".to_string()))),
             None => Err(EndOfCtrlStream),
         }?;
-        // check that version info in nonce matches our version
-        if &nonce[..VERSION.len()] != VERSION {
-            return Err(VersionMismatch((&nonce[..VERSION.len()]).to_string()));
+        // check that version info in version matches our version
+        if &version[..] != VERSION {
+            return Err(VersionMismatch((&version[..VERSION.len()]).to_string()));
         }
-        // append certificate to nonce and sign it
-        // XXX don't love that I have to use Debug for srv_certs; better way?
-        let to_sign = format!("{}::{:?}", nonce, srv_certs);
-        let sig = {
-            let rng = SystemRandom::new();
-            key.sign(&rng, to_sign.as_ref())?
-        };
 
         // next, send back the hello
-        self.send(ClHello(id, cert.as_der().to_vec(), sig.as_ref().to_vec()))
-            .await
-            .map_err(SendClHello)?;
+        self.send(ClHello(id)).await.map_err(SendClHello)?;
 
         // finally, get CoHello (or maybe an Error)
         match self.try_next().await.map_err(RecvCoHello)? {
@@ -136,46 +113,33 @@ impl CtrlStream {
         }
     }
 
-    pub(super) async fn send_nonce(&mut self, nonce: String) -> Result<(), CtrlStreamError> {
-        self.send(ControlMsg::CoNonce(nonce))
+    pub(super) async fn send_version(&mut self) -> Result<(), CtrlStreamError> {
+        self.send(ControlMsg::CoVersion(VERSION.to_string()))
             .await
-            .map_err(CtrlStreamError::NonceSend)
+            .map_err(CtrlStreamError::VersionSend)
     }
 
     pub(super) async fn recv_hello(
         &mut self,
-        nonce: &str,
-        certs: CertificateChain,
-    ) -> Result<(String, Vec<u8>), CtrlStreamError> {
+        peer_certs: Option<CertificateChain>,
+    ) -> Result<String, CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
-
-        let (pid, cder, sig) = match self.try_next().await.map_err(RecvClHello)? {
-            Some(ClHello(pid, cert, sig)) => Ok((pid, cert, sig)),
-            Some(msg) => Err(WrongMessage(
-                msg,
-                ClHello("".to_string(), Vec::new(), Vec::new()),
-            )),
+        match self.try_next().await.map_err(RecvClHello)? {
+            Some(ClHello(peer)) => {
+                let cert_bytes = peer_certs
+                    .ok_or(CertificateChain)?
+                    .iter()
+                    .next()
+                    .ok_or(CertificateChain)?
+                    .0
+                    .clone();
+                let clt_cert = EndEntityCert::from(cert_bytes.as_ref())?;
+                clt_cert.verify_is_valid_for_dns_name(DNSNameRef::try_from_ascii_str(&peer)?)?;
+                Ok(peer)
+            }
+            Some(msg) => Err(WrongMessage(msg, ClHello("".to_string()))),
             None => Err(EndOfCtrlStream),
-        }?;
-
-        // validate cert and signature from client
-        let trust = cert_der_as_trust_anchor(&cder[..])?;
-        let cert = EndEntityCert::from(&cder[..])?;
-        cert.verify_is_valid_tls_server_cert(
-            &[&ECDSA_P256_SHA256],
-            &TLSServerTrustAnchors(&[trust]),
-            &[],
-            webpki::Time::try_from(std::time::SystemTime::now())?,
-        )?;
-        cert.verify_is_valid_for_dns_name(DNSNameRef::try_from_ascii_str(&pid[..])?)?;
-
-        // for channel binding, append expected server cert chain to nonce
-        // XXX don't love that I have to use Debug for srv_certs; better way?
-        let msg_expect = format!("{}::{:?}", nonce, certs);
-        match cert.verify_signature(&ECDSA_P256_SHA256, msg_expect.as_ref(), &sig[..]) {
-            Ok(()) => Ok((pid, cder)),
-            Err(e) => Err(BadClientAuth(e)),
         }
     }
 

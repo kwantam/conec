@@ -13,17 +13,10 @@ use anyhow::Context;
 use bytes::Bytes;
 use futures::prelude::*;
 use quinn::Certificate;
-use ring::rand::SystemRandom;
-use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, io};
 use tokio::{runtime, time};
-use webpki::{
-    trust_anchor_util::cert_der_as_trust_anchor, DNSNameRef, EndEntityCert, TLSServerTrustAnchors,
-    ECDSA_P256_SHA256,
-};
-use x509_signature::{parse_certificate, SignatureScheme};
 
 #[test]
 fn test_simple() {
@@ -340,78 +333,6 @@ fn test_stream_loopback() {
             sender, strmid, rec, to_send
         );
         */
-        Ok(()) as Result<(), std::io::Error>
-    })
-    .ok();
-}
-
-#[test]
-fn test_client_signing() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async move {
-        // start server
-        let coord = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
-            coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(0);
-            Coord::new(coord_cfg).await.unwrap()
-        };
-        let port = coord.local_addr().port();
-
-        // start client
-        let (client, _inc) = {
-            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
-            client_cfg.set_port(port);
-            Client::new(client_cfg.clone()).await.unwrap()
-        };
-
-        time::delay_for(Duration::from_millis(40)).await;
-        assert_eq!(coord.num_clients(), 1);
-
-        let cert = client._cert.clone();
-        let cert_bytes = cert.as_der().to_vec();
-        let one_cert = Certificate::from_der(&cert_bytes[..]).unwrap();
-        assert_eq!(one_cert.as_der(), &cert_bytes[..]);
-        let sig = {
-            let rng = SystemRandom::new();
-            client._key.sign(&rng, &cert_bytes).unwrap()
-        };
-
-        let pk = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &cert_bytes[..]);
-        pk.verify(&cert_bytes, sig.as_ref())
-            .expect_err("ring sig check unexpectedly succeeded");
-
-        let x509 = parse_certificate(&cert_bytes[..]).unwrap();
-        x509.check_tls13_signature(
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            &cert_bytes[..],
-            sig.as_ref(),
-        )
-        .expect("x509 sig check unexpectedly failed");
-        x509.check_self_issued()
-            .expect("x509 self-sig check unexpectedly failed");
-
-        let webp = EndEntityCert::from(&cert_bytes[..]).unwrap();
-        let time = webpki::Time::try_from(std::time::SystemTime::now()).unwrap();
-        let trust = cert_der_as_trust_anchor(&cert_bytes[..]).unwrap();
-        webp.verify_is_valid_tls_server_cert(
-            &[&ECDSA_P256_SHA256],
-            &TLSServerTrustAnchors(&[trust]),
-            &[],
-            time,
-        )
-        .expect("invalid self-signed server cert");
-        webp.verify_is_valid_for_dns_name(DNSNameRef::try_from_ascii_str("client1").unwrap())
-            .expect("expected 'client1' hostname, got something else");
-        webp.verify_signature(&ECDSA_P256_SHA256, &cert_bytes[..], sig.as_ref())
-            .expect("webpki sig check unexpectedly failed");
-
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();

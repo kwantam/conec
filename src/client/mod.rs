@@ -16,9 +16,11 @@ See [library documentation](../index.html) for more info on how to instantiate a
 mod chan;
 pub(crate) mod config;
 mod istream;
+mod tls;
 
-use super::consts::ALPN_CONEC;
-use super::types::{ConecConn, ConecConnError};
+use crate::consts::ALPN_CONEC;
+use crate::types::{ConecConn, ConecConnError};
+use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingOutStream, OutStreamError};
 use config::{CertGenError, ClientConfig};
@@ -28,11 +30,7 @@ pub use istream::{
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
-use quinn::{
-    crypto::rustls::TLSError, Certificate, ClientConfigBuilder, Endpoint, EndpointError,
-    ParseError, ServerConfigBuilder,
-};
-use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
+use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, Endpoint, EndpointError, ParseError};
 
 ///! Client::new constructor errors
 #[derive(Debug, Error)]
@@ -55,9 +53,6 @@ pub enum ClientError {
     ///! Error setting up certificate chain
     #[error(display = "Certificate chain: {:?}", _0)]
     CertificateChain(#[source] TLSError),
-    ///! Error with client ephemeral key
-    #[error(display = "Ephemeral key: {:?}", _0)]
-    PrivateKey(#[error(from)] ring::error::KeyRejected),
     ///! Error parsing client ephemeral cert
     #[error(display = "Ephemeral cert: {:?}", _0)]
     CertificateParse(#[source] ParseError),
@@ -70,8 +65,6 @@ pub struct Client {
     endpoint: Endpoint,
     coord: ClientChan,
     ctr: u32,
-    pub(crate) _cert: Certificate,
-    pub(crate) _key: EcdsaKeyPair,
 }
 
 impl Client {
@@ -85,32 +78,27 @@ impl Client {
         };
         // unwrap is safe because gen_certs suceeded above
         let (cert, privkey, key) = config.cert_and_key.unwrap();
-        let clt_cert = Certificate::from_der(cert.iter().next().unwrap().as_ref())?;
-        let clt_key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &key)?;
         // build the client configuration
-        let mut qcc = ClientConfigBuilder::default();
-        qcc.protocols(ALPN_CONEC);
+        let mut qccb = ClientConfigBuilder::new({
+            let mut qcc = quinn::ClientConfig::default();
+            let clt_cert = cert.iter().next().unwrap().0.clone();
+            qcc.crypto = tls::build_rustls_client_config(clt_cert, key)?;
+            qcc
+        });
+        qccb.protocols(ALPN_CONEC);
         if config.keylog {
-            qcc.enable_keylog();
+            qccb.enable_keylog();
         }
         if let Some(ca) = config.extra_ca {
-            qcc.add_certificate_authority(ca)?;
+            qccb.add_certificate_authority(ca)?;
         }
 
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
-        endpoint.default_client_config(qcc.build());
+        endpoint.default_client_config(qccb.build());
         if config.listen {
-            // build a server configuration, too
-            let mut qsc = ServerConfigBuilder::default();
-            qsc.protocols(ALPN_CONEC);
-            qsc.use_stateless_retry(config.stateless_retry);
-            if config.keylog {
-                qsc.enable_keylog();
-            }
-            qsc.certificate(cert, privkey)?;
-            // set server config on endpoint
-            endpoint.listen(qsc.build());
+            let qsc = Coord::build_config(config.stateless_retry, config.keylog, cert, privkey)?;
+            endpoint.listen(qsc);
         }
         let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
 
@@ -120,7 +108,7 @@ impl Client {
 
         // set up the control stream with the coordinator
         let ctrl = conn
-            .accept_ctrl(config.id, &clt_cert, &clt_key, &mut ibi)
+            .accept_ctrl(config.id, &mut ibi)
             .await
             .map_err(ClientError::AcceptCtrl)?;
 
@@ -143,8 +131,6 @@ impl Client {
                 endpoint,
                 coord,
                 ctr: 1u32 << 31,
-                _cert: clt_cert,
-                _key: clt_key,
             },
             istrms,
         ))
