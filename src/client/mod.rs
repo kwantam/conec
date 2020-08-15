@@ -103,12 +103,12 @@ impl Client {
         let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
-        let (mut conn, mut ibi) =
+        let (mut conn, ibi) =
             ConecConn::connect(&mut endpoint, &config.coord, config.addr, None).await?;
 
         // set up the control stream with the coordinator
         let ctrl = conn
-            .accept_ctrl(config.id, &mut ibi)
+            .connect_ctrl(config.id)
             .await
             .map_err(ClientError::AcceptCtrl)?;
 

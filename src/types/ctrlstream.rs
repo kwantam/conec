@@ -23,9 +23,8 @@ use webpki::{DNSNameRef, EndEntityCert};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ControlMsg {
-    CoVersion(String),
+    ClHello(String, String),
     CoHello,
-    ClHello(String),
     HelloError(String),
     NewStreamReq(String, u32),
     NewStreamOk(u32),
@@ -34,8 +33,6 @@ pub enum ControlMsg {
 
 #[derive(Debug, Error)]
 pub enum CtrlStreamError {
-    #[error(display = "Recv CoVersion: {:?}", _0)]
-    VersionRecv(#[error(source, no_from)] io::Error),
     #[error(display = "Unexpected end of control stream")]
     EndOfCtrlStream,
     #[error(display = "Wrong message: got {:?}, expected {:?}", _0, _1)]
@@ -50,8 +47,6 @@ pub enum CtrlStreamError {
     RecvCoHello(#[error(source, no_from)] io::Error),
     #[error(display = "HelloError from peer: {:?}", _0)]
     PeerHelloError(String),
-    #[error(display = "Send CoVersion: {:?}", _0)]
-    VersionSend(#[error(source, no_from)] io::Error),
     #[error(display = "Sink flush: {:?}", _0)]
     SinkFlush(#[error(source, no_from)] io::Error),
     #[error(display = "Sink finish: {:?}", _0)]
@@ -86,23 +81,14 @@ impl CtrlStream {
         }
     }
 
-    pub(super) async fn send_hello(&mut self, id: String) -> Result<(), CtrlStreamError> {
+    pub(super) async fn send_clhello(&mut self, id: String) -> Result<(), CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
 
-        // first, get the version from the server
-        let version = match self.try_next().await.map_err(VersionRecv)? {
-            Some(CoVersion(n)) => Ok(n),
-            Some(msg) => Err(WrongMessage(msg, CoVersion("".to_string()))),
-            None => Err(EndOfCtrlStream),
-        }?;
-        // check that version info in version matches our version
-        if &version[..] != VERSION {
-            return Err(VersionMismatch((&version[..VERSION.len()]).to_string()));
-        }
-
-        // next, send back the hello
-        self.send(ClHello(id)).await.map_err(SendClHello)?;
+        // next, send the hello
+        self.send(ClHello(id, VERSION.to_string()))
+            .await
+            .map_err(SendClHello)?;
 
         // finally, get CoHello (or maybe an Error)
         match self.try_next().await.map_err(RecvCoHello)? {
@@ -113,20 +99,16 @@ impl CtrlStream {
         }
     }
 
-    pub(super) async fn send_version(&mut self) -> Result<(), CtrlStreamError> {
-        self.send(ControlMsg::CoVersion(VERSION.to_string()))
-            .await
-            .map_err(CtrlStreamError::VersionSend)
-    }
-
-    pub(super) async fn recv_hello(
+    pub(super) async fn recv_clhello(
         &mut self,
         peer_certs: Option<CertificateChain>,
     ) -> Result<String, CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
+
         match self.try_next().await.map_err(RecvClHello)? {
-            Some(ClHello(peer)) => {
+            Some(ClHello(_, version)) if &version[..] != VERSION => Err(VersionMismatch(version)),
+            Some(ClHello(peer, _)) => {
                 let cert_bytes = peer_certs
                     .ok_or(CertificateChain)?
                     .iter()
@@ -138,7 +120,7 @@ impl CtrlStream {
                 clt_cert.verify_is_valid_for_dns_name(DNSNameRef::try_from_ascii_str(&peer)?)?;
                 Ok(peer)
             }
-            Some(msg) => Err(WrongMessage(msg, ClHello("".to_string()))),
+            Some(msg) => Err(WrongMessage(msg, ClHello("".to_string(), "".to_string()))),
             None => Err(EndOfCtrlStream),
         }
     }

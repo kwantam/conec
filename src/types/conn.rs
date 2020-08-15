@@ -45,7 +45,7 @@ pub enum ConecConnError {
 
 pub(crate) struct ConecConn(Connection);
 
-fn connect_help(
+fn connect_with_option(
     endpoint: &Endpoint,
     addr: &SocketAddr,
     name: &str,
@@ -67,7 +67,9 @@ impl ConecConn {
     ) -> Result<(Self, IncomingBiStreams), ConecConnError> {
         // no name resolution: explicit SocketAddr given
         if caddr.is_sockaddr() {
-            return match connect_help(endpoint, caddr.get_addr().unwrap(), cname, config)?.await {
+            return match connect_with_option(endpoint, caddr.get_addr().unwrap(), cname, config)?
+                .await
+            {
                 Err(_) => Err(ConecConnError::CouldNotConnect),
                 Ok(c) => Ok(Self::new(c)),
             };
@@ -81,7 +83,7 @@ impl ConecConn {
             .filter(|x| use_ipv4 == x.is_ipv4())
         {
             resolved = true;
-            match connect_help(endpoint, &coord_addr, cname, config.clone())?.await {
+            match connect_with_option(endpoint, &coord_addr, cname, config.clone())?.await {
                 Err(_) => continue,
                 Ok(c) => return Ok(Self::new(c)),
             }
@@ -102,26 +104,7 @@ impl ConecConn {
         (Self(conn), b_str)
     }
 
-    pub(crate) async fn accept_ctrl(
-        &mut self,
-        id: String,
-        ibi: &mut IncomingBiStreams,
-    ) -> Result<CtrlStream, ConecConnError> {
-        let (cc_send, cc_recv) = ibi
-            .next()
-            .await
-            .ok_or(ConecConnError::EndOfBidiStream)?
-            .map_err(ConecConnError::AcceptBidiStream)?;
-        let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
-
-        ctrl_stream
-            .send_hello(id)
-            .await
-            .map_err(ConecConnError::SendHello)?;
-        Ok(ctrl_stream)
-    }
-
-    pub(crate) async fn connect_ctrl(&mut self) -> Result<(CtrlStream, String), ConecConnError> {
+    pub(crate) async fn connect_ctrl(&mut self, id: String) -> Result<CtrlStream, ConecConnError> {
         // open a new control stream to newly connected client
         let (cc_send, cc_recv) = self
             .0
@@ -131,13 +114,26 @@ impl ConecConn {
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         ctrl_stream
-            .send_version()
+            .send_clhello(id)
             .await
-            .map_err(ConecConnError::VersionSend)?;
+            .map_err(ConecConnError::SendHello)?;
+        Ok(ctrl_stream)
+    }
+
+    pub(crate) async fn accept_ctrl(
+        &mut self,
+        ibi: &mut IncomingBiStreams,
+    ) -> Result<(CtrlStream, String), ConecConnError> {
+        let (cc_send, cc_recv) = ibi
+            .next()
+            .await
+            .ok_or(ConecConnError::EndOfBidiStream)?
+            .map_err(ConecConnError::AcceptBidiStream)?;
+        let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         // expect the client's hello back, check cert name, otherwise try to send client an error
         let peer_certs = self.0.authentication_data().peer_certificates;
-        match ctrl_stream.recv_hello(peer_certs).await {
+        match ctrl_stream.recv_clhello(peer_certs).await {
             Ok(peer) => Ok((ctrl_stream, peer)),
             Err(e) => {
                 ctrl_stream

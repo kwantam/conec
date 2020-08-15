@@ -92,14 +92,14 @@ impl CoordInner {
                     tokio::spawn(async move {
                         use CoordError::*;
                         use CoordEvent::*;
-                        let (mut conn, ibi) = match incoming.await {
+                        let (mut conn, mut ibi) = match incoming.await {
                             Err(e) => {
                                 sender.unbounded_send(AcceptError(Connect(e))).unwrap();
                                 return;
                             }
                             Ok(conn) => ConecConn::new(conn),
                         };
-                        let (ctrl, peer) = match conn.connect_ctrl().await {
+                        let (ctrl, peer) = match conn.accept_ctrl(&mut ibi).await {
                             Err(e) => {
                                 sender.unbounded_send(AcceptError(Control(e))).unwrap();
                                 return;
