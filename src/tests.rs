@@ -230,6 +230,67 @@ fn test_stream_bi() {
 }
 
 #[test]
+fn test_stream_bi_multi() {
+    let (cert, cpath, kpath) = get_cert_and_paths();
+    let mut rt = runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async move {
+        // start server
+        let coord = {
+            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca(cert.clone());
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (_client2, mut inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca(cert);
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 2);
+
+        let mut streams = Vec::new();
+        for _ in 0..4usize {
+            let (s12, r21) = client1
+                .new_stream("client2".to_string())
+                .unwrap()
+                .await
+                .unwrap();
+            let (sender, _strmid, s21, r12) = inc2.next().await.unwrap().await.unwrap();
+            assert_eq!(&sender, "client1");
+            streams.push((s12, r21, s21, r12));
+        }
+        let to_send = Bytes::from("ping pong");
+        for (mut s12, mut r21, mut s21, mut r12) in streams.into_iter() {
+            s12.send(to_send.clone()).await.unwrap();
+            let rec = r12.try_next().await?.unwrap().freeze();
+            s21.send(rec).await.unwrap();
+            let rec = r21.try_next().await?.unwrap();
+            assert_eq!(to_send, rec);
+        }
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
 fn test_stream_loopback() {
     let (cert, cpath, kpath) = get_cert_and_paths();
     let mut rt = runtime::Builder::new()
