@@ -73,21 +73,24 @@ abstraction:
     - [x] Client authentication via pubkeys
         - right now, client connects with ephemeral self-signed cert. once we
           add client-to-client connections, coord will pass that cert to client.
-          REVISIT?
     - [ ] direct Client-to-Client channels
-    - [ ] NAT detection / traversal
+    - [ ] direct Client <-> Coord streams
+    - [ ] automagically pick client-to-client vs proxied streams
+    - [ ] Allow Coord to require trusted CA for client certs
+        - in this case, coord will forward trust root for client-to-client
+    - [ ] NAT ~detection~ traversal
         - probably not so hard: clone UdpSocket, send a few packets on a timer
           when we try to connect directly to another client. This should work
           for most cases that are not symmetric NATs.
-    - [ ] automagically pick client-to-client vs proxied streams
 - questions / maybes
     - [x] Client driver - what is the API for this? one driver for whole client?
-    - [ ] better Client naming (name by pubkey? but only if not ephemeral...)
-    - [ ] Client <-> Coord streams? pseudoclient? alt: just spin up a Client
+    - [x] better Client naming (name by pubkey? but only if not ephemeral...)
+        - no. eventually, can enforce naming policy by using client cert CA at coord
+    - [x] Client <-> Coord streams? (decision: yes)
         - this seems like it should be quite easy to handle
-    - [ ] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg?
-    - [ ] switch from String to Bytes where possible to reduce copying?
-        - atomics seem likely to be more expensive than copies for this case!
+    - [x] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg? (decision: no)
+    - [x] switch from String to Bytes where possible to reduce copying?
+        - decision: no: atomics are potentially worse than copies for <= 1kB
 
 ## license
 
