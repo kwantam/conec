@@ -132,3 +132,9 @@ mod consts {
     pub(crate) const MAX_LOOPS: usize = 8;
     pub(crate) const VERSION: &str = "CONEC_V0.0.6";
 }
+
+///! Re-exports from quinn
+pub mod quinn {
+    ///! TLS Certificate (used in [ClientConfig](crate::ClientConfig))
+    pub use quinn::Certificate;
+}

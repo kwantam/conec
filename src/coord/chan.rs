@@ -24,7 +24,7 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-///! Ok variant output by [ConnectingInStream] future
+///! Output by [IncomingStreams](super::IncomingStreams)
 pub type NewInStream = (String, u32, OutStream, InStream);
 
 ///! Coordinator channel driver errors
