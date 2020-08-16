@@ -19,7 +19,7 @@ abstraction:
 
 - The basic abstraction is a channel, which connects two entities
   (Client or Coordinator). A channel comprises one bi-directional
-  control stream and zero or more unidirectional data streams.
+  control stream and zero or more bidirectional data streams.
 
   Every Client shares a channel with Coordinator: at startup, Client
   connects to Coordinator. Clients can also share a channel with
