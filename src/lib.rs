@@ -39,6 +39,8 @@ hostname and an IP address that Clients can reach. It is possible to use
 a self-signed certificate (generated, say, by [rcgen](https://docs.rs/rcgen/))
 as long as the Clients trust it; see [ClientConfig::set_ca].
 
+See `tests.rs` for more complete usage examples than the ones below.
+
 ## Coordinator
 
 To start a Coordinator, first build a [CoordConfig]. For example,
@@ -50,10 +52,11 @@ coord_cfg.set_port(1337);
 ```
 
 Next, pass this configuration to the [Coord] constructor, which returns
-a future that, when forced, starts up the Coordinator.
+a future that returns the Coordiator plus a [coord::IncomingStreams] object
+when forced.
 
 ```ignore
-let coord = Coord::new(coord_cfg).await.unwrap();
+let (coord, coord_istreams) = Coord::new(coord_cfg).await.unwrap();
 coord.await
 ```
 
@@ -62,7 +65,8 @@ These threads will run until the Coord struct is dropped and all
 clients have disconnected.
 
 Coord is a future that returns only if an error occurs. It is *not*
-necessary to await this future for the coordinator to run.
+necessary to await this future for the coordinator to run, but you
+shouldn't drop the Coord object if you want the Coordinator to run!
 
 ## Client
 
@@ -76,7 +80,7 @@ client_cfg.set_port(1337);
 ```
 
 Next, pass this configuration to the [Client] constructor, which
-is a future that returns the Client plus an [IncomingStreams](client::IncomingStreams) object
+is a future that returns the Client plus a [client::IncomingStreams] object
 when forced:
 
 ```ignore
@@ -86,32 +90,57 @@ let (client, istreams) = Client::new(client_cfg).await.unwrap();
 # Streams
 
 Once your Client has connected to its Coordinator, it can set up
-data streams with other Clients and send data on them:
+data streams with the Coordinator or other Clients, and send data on
+those streams:
 
 ```ignore
 let (mut to_client2, _from_client2) = client
-    .new_stream("client2".to_string(), 0)
-    .unwrap()
+    .new_stream("client2".to_string())
     .await
     .unwrap();
 to_client2.send(Bytes::from("hi there")).await.unwrap();
 ```
 
-The receiving client first accepts the stream and then reads data from it:
+The receiving client first accepts the stream from its
+[client::IncomingStreams] and then reads data from it:
 
 ```ignore
 let (peer, strmid, _to_client1, mut from_client1) = istreams
     .next()
     .await
-    .unwrap()
-    .await
     .unwrap();
-println!("Got new stream with id {} from peer {}", strmid, peer);
+println!("Got new stream with id {:?} from peer {}", strmid, peer);
 let rec = from_client1
     .try_next()
     .await?
     .unwrap();
 ```
+
+The first element of the returned 4-tuple will be `Some(<name>)` when the
+peer is a Client called `<name>`, or `None` when the peer is the Coordinator.
+To open a stream to the Coordinator, pass `None` to `new_stream`:
+
+```ignore
+let (mut to_coord, _from_coord) = client
+    .new_stream(None)   // NOTE: None means open stream to Coordinator
+    .await
+    .unwrap();
+to_coord.send(Bytes::from("hi coordinator")).await.unwrap();
+```
+
+The Coordinator receives this stream by taking the next element from its
+[coord::IncomingStreams]:
+
+```ignore
+let (peer, strmid, _to_client, mut from_client) = coord_istreams
+    .next()
+    .await
+    .unwrap();
+```
+
+For the coordinator, the first element of the returned 4-tuple is a
+[String] rather than an [Option], since all incoming streams
+must be from clients.
 */
 
 pub mod client;

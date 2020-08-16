@@ -24,7 +24,7 @@ use crate::Coord;
 pub use chan::ClientChanError;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 use config::{CertGenError, ClientConfig};
-pub use istream::IncomingStreams;
+pub use istream::{IncomingStreams, NewInStream};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;

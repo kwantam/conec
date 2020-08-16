@@ -25,7 +25,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 /// See [library documentation](../index.html) for a usage example.
 pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
-///! Ok variant output by [ConnectingInStream] future
+///! Output by [IncomingStreams]
 pub type NewInStream = (Option<String>, u32, OutStream, InStream);
 
 ///! Error variant output by [IncomingStreamsDriver]
