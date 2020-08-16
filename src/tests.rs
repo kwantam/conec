@@ -434,6 +434,11 @@ fn test_stream_coord_to_client() {
     .ok();
 }
 
+#[test]
+fn check_version() {
+    assert_eq!(crate::consts::VERSION, &format!("CONEC_V{}", env!("CARGO_PKG_VERSION")));
+}
+
 fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {
     let dir = directories_next::ProjectDirs::from("am.kwant", "conec", "conec-tests").unwrap();
     let path = dir.data_local_dir();
