@@ -194,6 +194,7 @@ impl CoordChanInner {
                         if self.sids.contains(&sid) {
                             handle.send(Err(OutStreamError::StreamId)).ok();
                         } else {
+                            self.sids.insert(sid);
                             let bi = self.conn.open_bi();
                             tokio::spawn(async move {
                                 let (send, recv) = match bi

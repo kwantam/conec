@@ -178,7 +178,7 @@ impl Client {
     pub fn new_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.coord.new_stream(to.into(), ctr)
+        self.new_stream_with_sid(to, ctr)
     }
 
     ///! Open a new proxied stream to another client with an explicit stream-id

@@ -363,13 +363,22 @@ impl Coord {
         self.endpoint.local_addr().unwrap()
     }
 
-    ///! Open a new stream to the given client
+    ///! Open a new stream to a Client
     pub fn new_stream(&mut self, to: String) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;
+        self.new_stream_with_sid(to, ctr)
+    }
+
+    ///! Open a new stream to a Client with an explicit stream-id
+    ///
+    /// The `sid` argument must be different for every call to this function for a given Client.
+    /// If mixing calls to this function with calls to [new_stream](Coord::new_stream), avoid using
+    /// `sid >= 1<<31`: those values are used automatically by that function.
+    pub fn new_stream_with_sid(&self, to: String, sid: u32) -> ConnectingOutStream {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .unbounded_send(CoordEvent::NewCoStream(to, ctr, sender))
+            .unbounded_send(CoordEvent::NewCoStream(to, sid, sender))
             .map_err(|e| {
                 if let CoordEvent::NewCoStream(_, _, sender) = e.into_inner() {
                     sender.send(Err(OutStreamError::Coord)).ok();

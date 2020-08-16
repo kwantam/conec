@@ -271,6 +271,8 @@ impl ClientChan {
         if inner.new_streams.get(&sid).is_some() {
             sender.send(Err(OutStreamError::StreamId)).ok();
         } else if to.is_coord() {
+            // record that we've used this sid
+            inner.new_streams.insert(sid, None);
             // send the coordinator a request and record the send side of the channel
             let sid = StreamTo::Coord(sid);
             inner.new_stream(sender, sid);

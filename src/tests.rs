@@ -323,7 +323,7 @@ fn test_stream_loopback() {
 }
 
 #[test]
-fn test_stream_client_coord() {
+fn test_stream_client_to_coord() {
     let (cert, cpath, kpath) = get_cert_and_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
@@ -363,6 +363,66 @@ fn test_stream_client_coord() {
         let rec = r11x.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
         assert_eq!("client1", &sender);
+
+        // should error if we try to reuse a sid, even with a different target
+        assert!(client.new_stream_with_sid("client1".to_string(), 1u32 << 31).await.is_err());
+
+        /*
+        println!(
+            "{}:{} sent '{:?}' (expected: '{:?}')",
+            sender, strmid, rec, to_send
+        );
+        */
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_stream_coord_to_client() {
+    let (cert, cpath, kpath) = get_cert_and_paths();
+    let mut rt = runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async move {
+        // start server
+        let (mut coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (_client, mut inc) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca(cert.clone());
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 1);
+
+        // open stream to client
+        let (mut s11, mut r11x) = coord.new_stream("client1".to_string()).await.unwrap();
+        // receive stream at coordinator
+        let (sender, _strmid, mut s11x, mut r11) = inc.next().await.unwrap();
+
+        let to_send = Bytes::from("loopback stream");
+        s11.send(to_send.clone()).await.unwrap();
+        let rec = r11.try_next().await?.unwrap().freeze();
+        s11x.send(rec).await.unwrap();
+        let rec = r11x.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+        assert!(sender.is_none());
+
+        // should error if we try to reuse a sid, even with a different target
+        assert!(coord.new_stream_with_sid("client2".to_string(), 1u32 << 31).await.is_err());
+
         /*
         println!(
             "{}:{} sent '{:?}' (expected: '{:?}')",
