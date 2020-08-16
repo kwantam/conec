@@ -61,7 +61,6 @@ pub(super) struct ClientChanInner {
     incs_bye_out: Option<oneshot::Sender<()>>,
     ref_count: usize,
     driver: Option<Waker>,
-    driver_lost: bool,
     to_send: VecDeque<ControlMsg>,
     new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
     flushing: bool,
@@ -210,7 +209,6 @@ impl ClientChanRef {
                 incs_bye_out: Some(incs_bye_out),
                 ref_count: 0,
                 driver: None,
-                driver_lost: false,
                 to_send: VecDeque::new(),
                 new_streams: HashMap::new(),
                 flushing: false,
@@ -255,9 +253,7 @@ impl Future for ClientChanDriver {
 
 impl Drop for ClientChanDriver {
     fn drop(&mut self) {
-        let mut inner = &mut *self.0.lock().unwrap();
-        // anyone still holding a ref to this channel?
-        inner.driver_lost = true;
+        let inner = &mut *self.0.lock().unwrap();
         // tell the incoming stream driver that we died
         inner.incs_bye_out.take().unwrap().send(()).ok();
     }

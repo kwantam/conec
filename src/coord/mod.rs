@@ -39,9 +39,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio::task::{JoinError, JoinHandle};
 
-///! A [Stream] of incoming data streams from Clients.
-pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
-
 ///! Coordinator constructor and driver errors
 #[derive(Debug, Error)]
 pub enum CoordError {
@@ -289,6 +286,11 @@ impl Future for CoordDriver {
         }
     }
 }
+
+///! A [Stream] of incoming data streams from Client or Coordinator.
+///
+/// See [library documentation](../index.html) for a usage example.
+pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
 ///! Main coordinator object
 ///

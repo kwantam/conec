@@ -11,52 +11,24 @@ use crate::consts::MAX_LOOPS;
 use crate::types::{InStream, OutStream};
 
 use err_derive::Error;
-use futures::channel::oneshot;
+use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use quinn::{ConnectionError, IncomingBiStreams};
-use std::collections::VecDeque;
-use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-///! Error variant output by [ConnectingInStream] future
-#[derive(Debug, Error)]
-pub enum InStreamError {
-    ///! Failed to read the initial message from the stream
-    #[error(display = "Reading InitMsg from stream: {:?}", _0)]
-    StreamRead(#[source] io::Error),
-    ///! Failed to parse initial message
-    #[error(display = "Deserializing InitMsg")]
-    InitMsg,
-    ///! Connection was canceled
-    #[error(display = "Incoming connection canceled: {:?}", _0)]
-    Canceled(#[source] oneshot::Canceled),
-}
+///! A [Stream] of incoming data streams from Client or Coordinator.
+///
+/// See [library documentation](../index.html) for a usage example.
+pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
 ///! Ok variant output by [ConnectingInStream] future
 pub type NewInStream = (Option<String>, u32, OutStream, InStream);
 
-///! An incoming stream that is currently connecting
-pub struct ConnectingInStream(oneshot::Receiver<Result<NewInStream, InStreamError>>);
-
-impl Future for ConnectingInStream {
-    type Output = Result<NewInStream, InStreamError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut self.0;
-        match inner.poll_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(InStreamError::Canceled(e))),
-            Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(Ok(i))) => Poll::Ready(Ok(i)),
-        }
-    }
-}
-
-///! Error variant output by [IncomingStreams]
+///! Error variant output by [IncomingStreamsDriver]
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
     ///! Transport unexpectedly stopped delivering new streams
@@ -65,6 +37,9 @@ pub enum IncomingStreamsError {
     ///! Client's connection to Coordinator disappeared
     #[error(display = "Client is gone")]
     ClientClosed,
+    ///! Incoming streams receiver disappeared
+    #[error(display = "IncomingStreams receiver is gone")]
+    ReceiverClosed,
     ///! Error while accepting new stream from transport
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
@@ -74,15 +49,18 @@ pub(super) struct IncomingStreamsInner {
     client: Option<oneshot::Sender<()>>,
     bye: oneshot::Receiver<()>,
     streams: IncomingBiStreams,
-    incoming: VecDeque<ConnectingInStream>,
     ref_count: usize,
     driver: Option<Waker>,
-    driver_lost: bool,
-    incoming_reader: Option<Waker>,
+    sender: mpsc::UnboundedSender<NewInStream>,
 }
 
 impl IncomingStreamsInner {
     fn drive_streams_recv(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
+        match self.sender.poll_ready(cx) {
+            Poll::Ready(Err(_)) => Err(IncomingStreamsError::ReceiverClosed),
+            _ => Ok(()),
+        }?;
+
         match self.bye.poll_unpin(cx) {
             Poll::Pending => Ok(()),
             _ => Err(IncomingStreamsError::ClientClosed),
@@ -95,7 +73,7 @@ impl IncomingStreamsInner {
                 Poll::Ready(None) => Err(IncomingStreamsError::EndOfBiStream),
                 Poll::Ready(Some(r)) => r.map_err(IncomingStreamsError::AcceptBiStream),
             }?;
-            let (sender, receiver) = oneshot::channel();
+            let sender = self.sender.clone();
             tokio::spawn(async move {
                 let mut read_stream = SymmetricallyFramed::new(
                     FramedRead::new(recv, LengthDelimitedCodec::new()),
@@ -103,25 +81,23 @@ impl IncomingStreamsInner {
                 );
                 let (peer, chanid) = match read_stream.try_next().await {
                     Err(e) => {
-                        sender.send(Err(InStreamError::StreamRead(e))).ok();
+                        tracing::warn!("drive_streams_recv: {:?}", e);
                         return;
                     }
                     Ok(msg) => match msg {
                         Some(peer_chanid) => peer_chanid,
                         None => {
-                            sender.send(Err(InStreamError::InitMsg)).ok();
+                            tracing::warn!("drive_streams_recv: unexpected end of stream");
                             return;
                         }
                     },
                 };
                 let instream = read_stream.into_inner();
                 let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
-                sender.send(Ok((peer, chanid, outstream, instream))).ok();
+                sender
+                    .unbounded_send((peer, chanid, outstream, instream))
+                    .ok();
             });
-            self.incoming.push_back(ConnectingInStream(receiver));
-            if let Some(task) = self.incoming_reader.take() {
-                task.wake();
-            }
             recvd += 1;
             if recvd >= MAX_LOOPS {
                 return Ok(true);
@@ -167,17 +143,19 @@ impl IncomingStreamsRef {
         client: oneshot::Sender<()>,
         bye: oneshot::Receiver<()>,
         streams: IncomingBiStreams,
-    ) -> Self {
-        Self(Arc::new(Mutex::new(IncomingStreamsInner {
-            client: Some(client),
-            bye,
-            streams,
-            incoming: VecDeque::new(),
-            ref_count: 0,
-            driver: None,
-            driver_lost: false,
-            incoming_reader: None,
-        })))
+    ) -> (Self, mpsc::UnboundedReceiver<NewInStream>) {
+        let (sender, incoming) = mpsc::unbounded();
+        (
+            Self(Arc::new(Mutex::new(IncomingStreamsInner {
+                client: Some(client),
+                bye,
+                streams,
+                ref_count: 0,
+                driver: None,
+                sender,
+            }))),
+            incoming,
+        )
     }
 }
 
@@ -210,31 +188,7 @@ impl Future for IncomingStreamsDriver {
 impl Drop for IncomingStreamsDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();
-        inner.driver_lost = true;
+        // tell the coord chan eriver that we died
         inner.client.take().unwrap().send(()).ok();
-        if let Some(task) = inner.incoming_reader.take() {
-            task.wake();
-        }
-    }
-}
-
-///! A [Stream] of incoming data streams from the Coordinator
-///
-/// See [library documentation](../index.html) for a usage example.
-pub struct IncomingStreams(pub(super) IncomingStreamsRef);
-
-impl Stream for IncomingStreams {
-    type Item = ConnectingInStream;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let inner = &mut *self.0.lock().unwrap();
-        if let Some(inc) = inner.incoming.pop_front() {
-            Poll::Ready(Some(inc))
-        } else if inner.driver_lost {
-            Poll::Ready(None)
-        } else {
-            inner.incoming_reader = Some(cx.waker().clone());
-            Poll::Pending
-        }
     }
 }

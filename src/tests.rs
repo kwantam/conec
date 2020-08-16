@@ -138,7 +138,7 @@ fn test_stream_uni() {
         // open stream to client2
         let (mut s12, _r21) = client1.new_stream("client2".to_string()).await.unwrap();
         // receive stream at client2
-        let (_sender, _strmid, _s21, mut r12) = inc2.next().await.unwrap().await.unwrap();
+        let (_sender, _strmid, _s21, mut r12) = inc2.next().await.unwrap();
 
         let to_send = Bytes::from("test stream");
         s12.send(to_send.clone()).await.unwrap();
@@ -195,7 +195,7 @@ fn test_stream_bi() {
         // open stream to client2
         let (mut s12, mut r21) = client1.new_stream("client2".to_string()).await.unwrap();
         // receive stream at client2
-        let (_sender, _strmid, mut s21, mut r12) = inc2.next().await.unwrap().await.unwrap();
+        let (_sender, _strmid, mut s21, mut r12) = inc2.next().await.unwrap();
 
         let to_send = Bytes::from("ping pong");
         s12.send(to_send.clone()).await.unwrap();
@@ -254,7 +254,7 @@ fn test_stream_bi_multi() {
         let mut streams = Vec::new();
         for _ in 0..4usize {
             let (s12, r21) = client1.new_stream("client2".to_string()).await.unwrap();
-            let (sender, _strmid, s21, r12) = inc2.next().await.unwrap().await.unwrap();
+            let (sender, _strmid, s21, r12) = inc2.next().await.unwrap();
             assert_eq!(sender, Some("client1".to_string()));
             streams.push((s12, r21, s21, r12));
         }
@@ -303,7 +303,7 @@ fn test_stream_loopback() {
         // open stream to client
         let (mut s11, mut r11x) = client.new_stream("client1".to_string()).await.unwrap();
         // receive stream at client
-        let (_sender, _strmid, mut s11x, mut r11) = inc.next().await.unwrap().await.unwrap();
+        let (_sender, _strmid, mut s11x, mut r11) = inc.next().await.unwrap();
 
         let to_send = Bytes::from("loopback stream");
         s11.send(to_send.clone()).await.unwrap();

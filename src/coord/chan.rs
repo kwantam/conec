@@ -71,7 +71,6 @@ pub(super) struct CoordChanInner {
     events: mpsc::UnboundedReceiver<CoordChanEvent>,
     ref_count: usize,
     driver: Option<Waker>,
-    driver_lost: bool,
     to_send: VecDeque<ControlMsg>,
     flushing: bool,
     new_streams: HashMap<u32, (SendStream, RecvStream)>,
@@ -334,7 +333,6 @@ impl CoordChanRef {
                 events,
                 ref_count: 0,
                 driver: None,
-                driver_lost: false,
                 to_send,
                 flushing: false,
                 new_streams: HashMap::new(),
@@ -381,9 +379,7 @@ impl Future for CoordChanDriver {
 
 impl Drop for CoordChanDriver {
     fn drop(&mut self) {
-        let mut inner = self.0.lock().unwrap();
-        // mark driver lost in case anyone is still holding a ref to this channel
-        inner.driver_lost = true;
+        let inner = self.0.lock().unwrap();
         // tell the coordinator that this channel is dead
         inner
             .coord

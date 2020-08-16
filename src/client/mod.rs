@@ -24,9 +24,7 @@ use crate::Coord;
 pub use chan::ClientChanError;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 use config::{CertGenError, ClientConfig};
-pub use istream::{
-    ConnectingInStream, InStreamError, IncomingStreams, IncomingStreamsError, NewInStream,
-};
+pub use istream::IncomingStreams;
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
@@ -103,6 +101,8 @@ impl From<Option<String>> for StreamPeer {
 /// See [library documentation](../index.html) for an example of constructing a Client.
 pub struct Client {
     endpoint: Endpoint,
+    #[allow(dead_code)]
+    incoming: IncomingStreamsRef,
     coord: ClientChan,
     ctr: u32,
 }
@@ -153,22 +153,20 @@ impl Client {
             .map_err(ClientError::AcceptCtrl)?;
 
         // set up the client-coordinator channel and spawn its driver
-        let (inner, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
-        let driver = ClientChanDriver(inner.clone());
+        let (coord, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
+        let driver = ClientChanDriver(coord.clone());
         tokio::spawn(async move { driver.await });
-        let coord = ClientChan(inner);
+        let coord = ClientChan(coord);
 
         // set up the incoming streams listener
-        let istrms = {
-            let inner = IncomingStreamsRef::new(i_client, i_bye, ibi);
-            let driver = IncomingStreamsDriver(inner.clone());
-            tokio::spawn(async move { driver.await });
-            IncomingStreams(inner)
-        };
+        let (incoming, istrms) = IncomingStreamsRef::new(i_client, i_bye, ibi);
+        let driver = IncomingStreamsDriver(incoming.clone());
+        tokio::spawn(async move { driver.await });
 
         Ok((
             Self {
                 endpoint,
+                incoming,
                 coord,
                 ctr: 1u32 << 31,
             },
