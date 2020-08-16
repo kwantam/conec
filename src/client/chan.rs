@@ -9,13 +9,14 @@
 
 use super::StreamPeer;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream, StreamTo};
+use crate::types::{
+    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
+    OutStreamError, StreamTo,
+};
 use crate::util;
 
 use err_derive::Error;
-use futures::channel::oneshot;
-use futures::prelude::*;
-use quinn::ConnectionError;
+use futures::{channel::oneshot, prelude::*};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -23,45 +24,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-
-///! Error variant output by [ConnectingOutStream] future
-#[derive(Debug, Error)]
-pub enum OutStreamError {
-    ///! Coordinator sent us an error
-    #[error(display = "Coordinator responded with error")]
-    Coord,
-    ///! Failed to send initial message
-    #[error(display = "Sending initial message: {:?}", _0)]
-    InitMsg(#[error(source, no_from)] io::Error),
-    ///! Failed to flush initial message
-    #[error(display = "Flushing init message: {:?}", _0)]
-    Flush(#[error(source, no_from)] io::Error),
-    ///! Failed to open bidirectional channel
-    #[error(display = "Opening bidirectional channel: {:?}", _0)]
-    OpenBi(#[source] ConnectionError),
-    ///! Opening channel was canceled
-    #[error(display = "Outgoing connection canceled: {:?}", _0)]
-    Canceled(#[source] oneshot::Canceled),
-}
-
-type ConnectingOutStreamHandle = oneshot::Sender<Result<(OutStream, InStream), OutStreamError>>;
-
-///! An outgoing stream that is currently connecting
-pub struct ConnectingOutStream(oneshot::Receiver<Result<(OutStream, InStream), OutStreamError>>);
-
-impl Future for ConnectingOutStream {
-    type Output = Result<(OutStream, InStream), OutStreamError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut self.0;
-        match inner.poll_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
-            Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(Ok(o))) => Poll::Ready(Ok(o)),
-        }
-    }
-}
 
 ///! Client channel driver errors
 #[derive(Debug, Error)]
@@ -128,7 +90,7 @@ impl ClientChanInner {
             let mut write_stream = SymmetricallyFramed::new(
                 FramedWrite::new(send, LengthDelimitedCodec::new()),
                 SymmetricalBincode::<StreamTo>::default(),
-                );
+            );
             if let Err(e) = write_stream.send(sid).await {
                 chan.send(Err(OutStreamError::InitMsg(e))).ok();
                 return;
@@ -304,22 +266,16 @@ impl Drop for ClientChanDriver {
 pub(super) struct ClientChan(pub(super) ClientChanRef);
 
 impl ClientChan {
-    pub(super) fn new_stream(
-        &self,
-        to: StreamPeer,
-        sid: u32,
-    ) -> Result<ConnectingOutStream, ClientChanError> {
+    pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
         // the new stream future is a channel that will contain the resulting stream
         let (sender, receiver) = oneshot::channel();
         let inner = &mut *self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.new_streams.get(&sid).is_some() {
-            return Err(ClientChanError::StreamNameInUse);
-        }
-
-        // send the coordinator a request and record the send side of the channel
-        if to.is_coord() {
+            sender.send(Err(OutStreamError::StreamId)).ok();
+        } else if to.is_coord() {
+            // send the coordinator a request and record the send side of the channel
             let sid = StreamTo::Coord(sid);
             inner.new_stream(sender, sid);
         } else {
@@ -330,6 +286,6 @@ impl ClientChan {
             inner.wake();
         }
 
-        Ok(ConnectingOutStream(receiver))
+        ConnectingOutStream(receiver)
     }
 }

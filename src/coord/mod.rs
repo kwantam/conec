@@ -18,13 +18,16 @@ pub(crate) mod config;
 mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
-use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
+use crate::types::{
+    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg,
+    CtrlStream, OutStreamError,
+};
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
 pub use chan::{CoordChanError, NewInStream};
 use config::CoordConfig;
 
 use err_derive::Error;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use quinn::{
     crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
@@ -66,6 +69,7 @@ enum CoordEvent {
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
     AcceptError(CoordError),
     ChanClose(String),
+    NewCoStream(String, u32, ConnectingOutStreamHandle),
     NewStreamReq(String, String, u32),
     NewStreamRes(
         String,
@@ -184,6 +188,13 @@ impl CoordInner {
                             tracing::warn!("NSRes client disappeared: {}:{}", to, sid);
                         }
                     }
+                    NewCoStream(to, sid, handle) => {
+                        if let Some(c_to) = self.clients.get(&to) {
+                            c_to.send(CoordChanEvent::BiOut(sid, handle));
+                        } else {
+                            handle.send(Err(OutStreamError::NoSuchPeer(to))).ok();
+                        }
+                    }
                 },
                 Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
                 Poll::Pending => break,
@@ -201,7 +212,7 @@ impl CoordInner {
 struct CoordRef(Arc<Mutex<CoordInner>>);
 
 impl CoordRef {
-    fn new(incoming: Incoming) -> (Self, IncomingStreams) {
+    fn new(incoming: Incoming) -> (Self, IncomingStreams, mpsc::UnboundedSender<CoordEvent>) {
         let (sender, events) = mpsc::unbounded();
         let (is_sender, incoming_streams) = mpsc::unbounded();
         (
@@ -210,11 +221,12 @@ impl CoordRef {
                 clients: HashMap::new(),
                 driver: None,
                 ref_count: 0,
-                sender,
+                sender: sender.clone(),
                 events,
                 is_sender,
             }))),
             incoming_streams,
+            sender,
         )
     }
 }
@@ -284,7 +296,9 @@ impl Future for CoordDriver {
 pub struct Coord {
     endpoint: Endpoint,
     inner: CoordRef,
+    sender: mpsc::UnboundedSender<CoordEvent>,
     driver_handle: JoinHandle<Result<(), CoordError>>,
+    ctr: u32,
 }
 
 impl Coord {
@@ -319,7 +333,7 @@ impl Coord {
         endpoint.listen(qsc);
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        let (inner, incoming_streams) = CoordRef::new(incoming);
+        let (inner, incoming_streams, sender) = CoordRef::new(incoming);
         let driver = CoordDriver(inner.clone());
         let driver_handle = tokio::spawn(async move { driver.await });
 
@@ -327,7 +341,9 @@ impl Coord {
             Self {
                 endpoint,
                 inner,
+                sender,
                 driver_handle,
+                ctr: 1u32 << 31,
             },
             incoming_streams,
         ))
@@ -343,6 +359,24 @@ impl Coord {
     pub fn local_addr(&self) -> std::net::SocketAddr {
         // unwrap is safe because Coord always has a bound socket
         self.endpoint.local_addr().unwrap()
+    }
+
+    ///! Open a new stream to the given client
+    pub fn new_stream(&mut self, to: String) -> ConnectingOutStream {
+        let ctr = self.ctr;
+        self.ctr += 1;
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .unbounded_send(CoordEvent::NewCoStream(to, ctr, sender))
+            .map_err(|e| {
+                if let CoordEvent::NewCoStream(_, _, sender) = e.into_inner() {
+                    sender.send(Err(OutStreamError::Coord)).ok();
+                } else {
+                    unreachable!();
+                }
+            })
+            .ok();
+        ConnectingOutStream(receiver)
     }
 }
 

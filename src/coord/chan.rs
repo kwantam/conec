@@ -9,14 +9,16 @@
 
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ControlMsg, CtrlStream, InStream, OutStream, StreamTo};
+use crate::types::{
+    ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream, OutStream,
+    OutStreamError, StreamTo,
+};
 use crate::util;
 
 use err_derive::Error;
-use futures::channel::mpsc;
-use futures::prelude::*;
+use futures::{channel::mpsc, prelude::*};
 use quinn::{ConnectionError, IncomingBiStreams, RecvStream, SendStream};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -74,6 +76,7 @@ pub(super) struct CoordChanInner {
     flushing: bool,
     new_streams: HashMap<u32, (SendStream, RecvStream)>,
     is_sender: mpsc::UnboundedSender<NewInStream>,
+    sids: HashSet<u32>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -82,6 +85,7 @@ pub(super) enum CoordChanEvent {
     NSReq(String, u32),
     NSRes(u32, Result<(SendStream, RecvStream), ConnectionError>),
     BiIn(StreamTo, OutStream, InStream),
+    BiOut(u32, ConnectingOutStreamHandle),
 }
 
 impl CoordChanInner {
@@ -161,7 +165,8 @@ impl CoordChanInner {
                             if let Some((send, recv)) = self.new_streams.remove(&sid) {
                                 let from = self.peer.clone();
                                 tokio::spawn(async move {
-                                    let send = match Self::stream_init(send, Some(from), sid).await {
+                                    let send = match Self::stream_init(send, Some(from), sid).await
+                                    {
                                         Ok(send) => send,
                                         Err(_) => {
                                             return;
@@ -179,11 +184,48 @@ impl CoordChanInner {
                             } else {
                                 self.to_send.push_back(ControlMsg::NewStreamErr(sid));
                             }
-                        },
+                        }
                         StreamTo::Coord(sid) => {
-                            self.is_sender.unbounded_send((self.peer.clone(), sid, n_send, n_recv)).ok();
-                        },
+                            self.is_sender
+                                .unbounded_send((self.peer.clone(), sid, n_send, n_recv))
+                                .ok();
+                        }
                     },
+                    BiOut(sid, handle) => {
+                        if self.sids.contains(&sid) {
+                            handle.send(Err(OutStreamError::StreamId)).ok();
+                        } else {
+                            let bi = self.conn.open_bi();
+                            tokio::spawn(async move {
+                                let (send, recv) = match bi
+                                    .err_into::<OutStreamError>()
+                                    .and_then(|(send, recv)| async move {
+                                        Self::stream_init(send, None, sid)
+                                            .err_into::<OutStreamError>()
+                                            .await
+                                            .map(|send| {
+                                                (
+                                                    send,
+                                                    FramedRead::new(
+                                                        recv,
+                                                        LengthDelimitedCodec::new(),
+                                                    ),
+                                                )
+                                            })
+                                    })
+                                    .await
+                                {
+                                    Err(e) => {
+                                        handle.send(Err(e)).ok();
+                                        return;
+                                    }
+                                    Ok(send_recv) => send_recv,
+                                };
+
+                                handle.send(Ok((send, recv))).ok();
+                            });
+                        }
+                    }
                 },
                 _ => break,
             }
@@ -297,6 +339,7 @@ impl CoordChanRef {
                 flushing: false,
                 new_streams: HashMap::new(),
                 is_sender,
+                sids: HashSet::new(),
             }))),
             sender,
         )

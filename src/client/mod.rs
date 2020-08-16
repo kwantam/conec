@@ -19,10 +19,10 @@ mod istream;
 mod tls;
 
 use crate::consts::ALPN_CONEC;
-use crate::types::{ConecConn, ConecConnError};
+use crate::types::{ConecConn, ConecConnError, ConnectingOutStream};
 use crate::Coord;
+pub use chan::ClientChanError;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
-pub use chan::{ClientChanError, ConnectingOutStream, OutStreamError};
 use config::{CertGenError, ClientConfig};
 pub use istream::{
     ConnectingInStream, InStreamError, IncomingStreams, IncomingStreamsError, NewInStream,
@@ -177,13 +177,10 @@ impl Client {
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator
-    pub fn new_stream<T: Into<StreamPeer>>(
-        &mut self,
-        to: T,
-    ) -> Result<ConnectingOutStream, ClientError> {
+    pub fn new_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;
-        Ok(self.coord.new_stream(to.into(), ctr)?)
+        self.coord.new_stream(to.into(), ctr)
     }
 
     ///! Open a new proxied stream to another client with an explicit stream-id
@@ -191,12 +188,8 @@ impl Client {
     /// The `sid` argument must be different for every call to this function for a given Client object.
     /// If mixing calls to this function with calls to [new_stream](Client::new_stream), avoid using
     /// `sid >= 1<<31`: those values are used automatically by that function.
-    pub fn new_stream_with_sid<T: Into<StreamPeer>>(
-        &self,
-        to: T,
-        sid: u32,
-    ) -> Result<ConnectingOutStream, ClientError> {
-        Ok(self.coord.new_stream(to.into(), sid)?)
+    pub fn new_stream_with_sid<T: Into<StreamPeer>>(&self, to: T, sid: u32) -> ConnectingOutStream {
+        self.coord.new_stream(to.into(), sid)
     }
 
     ///! Return the local address that Client is bound to
