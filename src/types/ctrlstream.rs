@@ -29,6 +29,7 @@ pub enum ControlMsg {
     NewStreamReq(String, u32),
     NewStreamOk(u32),
     NewStreamErr(u32),
+    KeepAlive,
 }
 
 #[derive(Debug, Error)]

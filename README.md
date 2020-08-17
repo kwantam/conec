@@ -46,7 +46,7 @@
         - right now, client connects with ephemeral self-signed cert. once we
           add client-to-client connections, coord will pass that cert to client.
     - [x] direct Client <-> Coord streams
-    - [ ] Client keepalive
+    - [x] Client keepalive
     - [ ] direct Client <-> Client channels
     - [ ] automagically pick client-to-client vs proxied streams
     - [x] Allow Coord to require trusted CA for client certs

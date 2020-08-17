@@ -32,6 +32,7 @@ pub struct ClientConfig {
     pub(super) cert_and_key: Option<(CertificateChain, PrivateKey, Vec<u8>)>,
     pub(super) stateless_retry: bool,
     pub(super) listen: bool,
+    pub(super) keepalive: bool,
 }
 
 ///! Error during Client certificate generation
@@ -68,6 +69,7 @@ impl ClientConfig {
             cert_and_key: None,
             stateless_retry: false,
             listen: true,
+            keepalive: true,
         }
     }
 
@@ -156,6 +158,18 @@ impl ClientConfig {
     /// This means that all streams must be proxed through Coordinator
     pub fn disable_listen(&mut self) -> &mut Self {
         self.listen = false;
+        self
+    }
+
+    ///! Disable Client keepalive messages
+    ///
+    /// By default, Clients send a short keepalive message every 5 seconds.
+    /// This setting disables that.
+    ///
+    /// Note that when keepalive is disabled, the underlying transport will close idle
+    /// connections after 10 seconds.
+    pub fn disable_keepalive(&mut self) -> &mut Self {
+        self.keepalive = false;
         self
     }
 

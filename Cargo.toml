@@ -20,7 +20,7 @@ rcgen = "0.8"
 rustls = { version = "0.17", features = ["quic", "dangerous_configuration"] }
 rustls-native-certs = "0.3"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "0.2", features = ["rt-core"] }
+tokio = { version = "0.2", features = ["rt-core", "time"] }
 tokio-serde = { version = "0.6", features = ["bincode"] }
 tokio-util = { version = "0.3", features = ["codec"] }
 tracing = "0.1"

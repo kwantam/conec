@@ -22,6 +22,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+use tokio::time::{interval, Duration, Interval};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
@@ -52,6 +53,9 @@ pub enum ClientChanError {
     ///! Incoming stream driver died
     #[error(display = "Incoming driver hung up")]
     IncomingDriverHup,
+    ///! Keepalive timer disappeared unexpectedly
+    #[error(display = "Keepalive timer disappered unexpectedly")]
+    KeepaliveTimer,
 }
 
 pub(super) struct ClientChanInner {
@@ -64,6 +68,7 @@ pub(super) struct ClientChanInner {
     to_send: VecDeque<ControlMsg>,
     new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
     flushing: bool,
+    keepalive: Option<Interval>,
 }
 
 impl ClientChanInner {
@@ -106,12 +111,20 @@ impl ClientChanInner {
         });
     }
 
-    fn handle_events(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
+    fn handle_events(&mut self, cx: &mut Context) -> Result<(), ClientChanError> {
+        match self.keepalive.as_mut().map_or(Poll::Pending, |k| k.poll_next_unpin(cx)) {
+            Poll::Pending => Ok(()),
+            Poll::Ready(None) => Err(ClientChanError::KeepaliveTimer),
+            Poll::Ready(Some(_)) => {
+                self.to_send.push_back(ControlMsg::KeepAlive);
+                Ok(())
+            }
+        }?;
         match self.incs_bye_in.poll_unpin(cx) {
             Poll::Pending => Ok(()),
             _ => Err(ClientChanError::IncomingDriverHup),
         }?;
-        Ok(false)
+        Ok(())
     }
 
     fn get_new_stream(&mut self, sid: u32) -> Result<ConnectingOutStreamHandle, ClientChanError> {
@@ -147,6 +160,7 @@ impl ClientChanInner {
                     chan.send(Err(OutStreamError::Coord)).ok();
                     Ok(())
                 }
+                ControlMsg::KeepAlive => Ok(()),
                 _ => Err(ClientChanError::WrongMessage(msg)),
             }?;
             recvd += 1;
@@ -212,6 +226,7 @@ impl ClientChanRef {
                 to_send: VecDeque::new(),
                 new_streams: HashMap::new(),
                 flushing: false,
+                keepalive: None,
             }))),
             i_client,
             i_bye,
@@ -220,7 +235,17 @@ impl ClientChanRef {
 }
 
 #[must_use = "ClientChanDriver must be spawned!"]
-pub(super) struct ClientChanDriver(pub(super) ClientChanRef);
+pub(super) struct ClientChanDriver(ClientChanRef);
+
+impl ClientChanDriver {
+    pub fn new(inner: ClientChanRef, keepalive: bool) -> Self {
+        if keepalive {
+            let inner_locked = &mut inner.lock().unwrap();
+            inner_locked.keepalive.replace(interval(Duration::new(6, 666666666)));
+        }
+        Self(inner)
+    }
+}
 
 impl Future for ClientChanDriver {
     type Output = Result<(), ClientChanError>;
@@ -233,7 +258,7 @@ impl Future for ClientChanDriver {
         };
         loop {
             let mut keep_going = false;
-            keep_going |= inner.handle_events(cx)?;
+            inner.handle_events(cx)?;
             keep_going |= inner.drive_ctrl_recv(cx)?;
             if !inner.to_send.is_empty() || inner.flushing {
                 keep_going |= inner.drive_ctrl_send(cx)?;

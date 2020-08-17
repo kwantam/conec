@@ -118,6 +118,10 @@ impl CoordChanInner {
                     .coord
                     .unbounded_send(CoordEvent::NewStreamReq(self.peer.clone(), to, sid))
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
+                ControlMsg::KeepAlive => {
+                    self.to_send.push_back(ControlMsg::KeepAlive);
+                    Ok(())
+                },
                 _ => Err(CoordChanError::WrongMessage(msg)),
             }?;
             recvd += 1;

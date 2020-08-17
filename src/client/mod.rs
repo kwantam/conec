@@ -160,7 +160,7 @@ impl Client {
 
         // set up the client-coordinator channel and spawn its driver
         let (coord, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
-        let driver = ClientChanDriver(coord.clone());
+        let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
         tokio::spawn(async move { driver.await });
         let coord = ClientChan(coord);
 
