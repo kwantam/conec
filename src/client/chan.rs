@@ -281,6 +281,7 @@ impl Drop for ClientChanDriver {
         let inner = &mut *self.0.lock().unwrap();
         // tell the incoming stream driver that we died
         inner.incs_bye_out.take().unwrap().send(()).ok();
+        inner.keepalive.take();
     }
 }
 
