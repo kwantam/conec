@@ -15,7 +15,6 @@ ct-logs = "0.6"
 err-derive = "0.2"
 futures = "0.3"
 quinn = "0.6"
-rand = "0.7"
 rcgen = "0.8"
 rustls = { version = "0.17", features = ["quic", "dangerous_configuration"] }
 rustls-native-certs = "0.3"
@@ -29,4 +28,5 @@ webpki = "0.21"
 [dev-dependencies]
 anyhow = "1.0"
 directories-next = "1.0"
-x509-signature = "0.5"
+rand = "0.7"
+rcgen = { version = "0.8", features = ["x509-parser"] }
