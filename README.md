@@ -54,6 +54,7 @@
         - probably not so hard: clone UdpSocket, send a few packets on a timer
           when we try to connect directly to another client. This should work
           for most cases that are not symmetric NATs.
+    - [ ] more `tracing`
 - questions / maybes
     - [x] Client driver - what is the API for this? one driver for whole client?
     - [x] better Client naming (name by pubkey? but only if not ephemeral...)
