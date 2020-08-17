@@ -7,12 +7,15 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::{Client, ClientConfig, Coord, CoordConfig};
+use crate::{
+    ca::{generate_ca, generate_cert},
+    Client, ClientConfig, Coord, CoordConfig,
+};
 
 use anyhow::Context;
 use bytes::Bytes;
 use futures::prelude::*;
-use quinn::Certificate;
+use quinn::{Certificate, CertificateChain, PrivateKey};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, io};
@@ -20,7 +23,7 @@ use tokio::{runtime, time};
 
 #[test]
 fn test_simple() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -29,7 +32,7 @@ fn test_simple() {
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -39,7 +42,7 @@ fn test_simple() {
         // start client
         let client = {
             let mut client_cfg = ClientConfig::new("client".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert);
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -54,7 +57,7 @@ fn test_simple() {
 
 #[test]
 fn test_repeat_name() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -63,7 +66,7 @@ fn test_repeat_name() {
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0);
             Coord::new(coord_cfg).await.unwrap()
@@ -73,7 +76,8 @@ fn test_repeat_name() {
         // start client
         let client_cfg = {
             let mut tmp = ClientConfig::new("client".to_string(), "localhost".to_string());
-            tmp.set_ca(cert).set_port(port);
+            tmp.set_ca_from_file(&cpath).unwrap();
+            tmp.set_port(port);
             tmp
         };
         let client = Client::new(client_cfg.clone()).await.unwrap();
@@ -100,7 +104,7 @@ fn test_repeat_name() {
 
 #[test]
 fn test_stream_uni() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -109,7 +113,7 @@ fn test_stream_uni() {
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -119,7 +123,7 @@ fn test_stream_uni() {
         // start client 1
         let (mut client1, _inc1) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -127,7 +131,7 @@ fn test_stream_uni() {
         // start client 2
         let (_client2, mut inc2) = {
             let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert);
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -157,7 +161,7 @@ fn test_stream_uni() {
 
 #[test]
 fn test_stream_bi() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -166,7 +170,7 @@ fn test_stream_bi() {
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -176,7 +180,7 @@ fn test_stream_bi() {
         // start client 1
         let (mut client1, _inc1) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -184,7 +188,7 @@ fn test_stream_bi() {
         // start client 2
         let (_client2, mut inc2) = {
             let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert);
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -216,7 +220,7 @@ fn test_stream_bi() {
 
 #[test]
 fn test_stream_bi_multi() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -225,7 +229,7 @@ fn test_stream_bi_multi() {
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -235,7 +239,7 @@ fn test_stream_bi_multi() {
         // start client 1
         let (mut client1, _inc1) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -243,7 +247,7 @@ fn test_stream_bi_multi() {
         // start client 2
         let (_client2, mut inc2) = {
             let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert);
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -273,7 +277,7 @@ fn test_stream_bi_multi() {
 
 #[test]
 fn test_stream_loopback() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -282,7 +286,7 @@ fn test_stream_loopback() {
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -292,7 +296,7 @@ fn test_stream_loopback() {
         // start client 1
         let (mut client, mut inc) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -324,7 +328,7 @@ fn test_stream_loopback() {
 
 #[test]
 fn test_stream_client_to_coord() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -333,7 +337,7 @@ fn test_stream_client_to_coord() {
     rt.block_on(async move {
         // start server
         let (coord, mut cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -343,7 +347,7 @@ fn test_stream_client_to_coord() {
         // start client 1
         let (mut client, _inc) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -365,7 +369,10 @@ fn test_stream_client_to_coord() {
         assert_eq!("client1", &sender);
 
         // should error if we try to reuse a sid, even with a different target
-        assert!(client.new_stream_with_sid("client1".to_string(), 1u32 << 31).await.is_err());
+        assert!(client
+            .new_stream_with_sid("client1".to_string(), 1u32 << 31)
+            .await
+            .is_err());
 
         /*
         println!(
@@ -380,7 +387,7 @@ fn test_stream_client_to_coord() {
 
 #[test]
 fn test_stream_coord_to_client() {
-    let (cert, cpath, kpath) = get_cert_and_paths();
+    let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new()
         .basic_scheduler()
         .enable_all()
@@ -389,7 +396,7 @@ fn test_stream_coord_to_client() {
     rt.block_on(async move {
         // start server
         let (mut coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new(cpath, kpath).unwrap();
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
             Coord::new(coord_cfg).await.unwrap()
@@ -399,7 +406,7 @@ fn test_stream_coord_to_client() {
         // start client 1
         let (_client, mut inc) = {
             let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca(cert.clone());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
@@ -421,7 +428,10 @@ fn test_stream_coord_to_client() {
         assert!(sender.is_none());
 
         // should error if we try to reuse a sid, even with a different target
-        assert!(coord.new_stream_with_sid("client2".to_string(), 1u32 << 31).await.is_err());
+        assert!(coord
+            .new_stream_with_sid("client2".to_string(), 1u32 << 31)
+            .await
+            .is_err());
 
         /*
         println!(
@@ -435,16 +445,132 @@ fn test_stream_coord_to_client() {
 }
 
 #[test]
-fn check_version() {
-    assert_eq!(crate::consts::VERSION, &format!("CONEC_V{}", env!("CARGO_PKG_VERSION")));
+fn test_client_cert() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    // generate CA and client certificates
+    let cacert = generate_ca().unwrap();
+    let cacert_bytes = cacert.serialize_der().unwrap();
+    let (cert1_bytes, key1_bytes) = generate_cert("client1".to_string(), &cacert).unwrap();
+    let (cert2_bytes, key2_bytes) = generate_cert("client2".to_string(), &cacert).unwrap();
+    let cacert = Certificate::from_der(cacert_bytes.as_ref()).unwrap();
+    let c1cert = CertificateChain::from_certs(Certificate::from_der(cert1_bytes.as_ref()));
+    let c1key = PrivateKey::from_der(key1_bytes.as_ref()).unwrap();
+    let c2cert = CertificateChain::from_certs(Certificate::from_der(cert2_bytes.as_ref()));
+    let c2key = PrivateKey::from_der(key2_bytes.as_ref()).unwrap();
+    let c2key2 = PrivateKey::from_der(key2_bytes.as_ref()).unwrap();
+
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            coord_cfg.set_client_ca(cacert.clone());
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (_client, _inc) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c1cert, c1key, key1_bytes);
+            Client::new(client_cfg).await.unwrap()
+        };
+
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 1);
+
+        // start client with wrong name in cert
+        {
+            let mut client_cfg = ClientConfig::new("client3".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c2cert.clone(), c2key, key2_bytes.clone());
+            Client::new(client_cfg)
+                .await
+                .map(|_| ())
+                .expect_err("should have failed to connect with mismatched name");
+        };
+
+        // start client with wrong name in cert
+        let (_client2, _inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c2cert, c2key2, key2_bytes);
+            Client::new(client_cfg).await.unwrap()
+        };
+
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 2);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
 }
 
-fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {
+#[test]
+fn test_reject_client_cert() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    // generate CA and client certificates
+    let cacert = generate_ca().unwrap();
+    let cacert = Certificate::from_der(cacert.serialize_der().unwrap().as_ref()).unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            coord_cfg.set_client_ca(cacert.clone());
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // try to start client --- should fail because self-signed cert should be rejected
+        let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+        client_cfg.set_ca_from_file(&cpath).unwrap();
+        client_cfg.set_port(port);
+        Client::new(client_cfg.clone())
+            .await
+            .map(|_| ())
+            .expect_err("client should have failed to connect");
+
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_clients(), 0);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn check_version() {
+    assert_eq!(
+        crate::consts::VERSION,
+        &format!("CONEC_V{}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+fn get_cert_paths() -> (PathBuf, PathBuf) {
     let dir = directories_next::ProjectDirs::from("am.kwant", "conec", "conec-tests").unwrap();
     let path = dir.data_local_dir();
     let cert_path = path.join("cert.der");
     let key_path = path.join("key.der");
-    let cert = match fs::read(&cert_path) {
+    match fs::read(&cert_path) {
         Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
             println!("generating self-signed cert");
             let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
@@ -459,10 +585,9 @@ fn get_cert_and_paths() -> (Certificate, PathBuf, PathBuf) {
             fs::write(&key_path, &key)
                 .context("failed to write key")
                 .unwrap();
-            cert
         }
-        Ok(cert) => cert,
+        Ok(_) => (),
         _ => panic!("could not stat file {:?}", cert_path),
-    };
-    (Certificate::from_der(&cert).unwrap(), cert_path, key_path)
+    }
+    (cert_path, key_path)
 }

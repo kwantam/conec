@@ -137,7 +137,13 @@ impl Client {
         let mut endpoint = Endpoint::builder();
         endpoint.default_client_config(qccb.build());
         if config.listen {
-            let qsc = Coord::build_config(config.stateless_retry, config.keylog, cert, privkey)?;
+            let qsc = Coord::build_config(
+                config.stateless_retry,
+                config.keylog,
+                cert,
+                privkey,
+                config.client_ca,
+            )?;
             endpoint.listen(qsc);
         }
         let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;

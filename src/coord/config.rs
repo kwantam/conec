@@ -8,11 +8,11 @@
 // except according to those terms.
 
 use crate::consts::DFLT_PORT;
-use crate::util::{get_cert_and_key, CertReadError};
+use crate::util::{get_cert, get_cert_and_key, CertReadError};
 
-use quinn::{CertificateChain, PrivateKey};
+use quinn::{Certificate, CertificateChain, PrivateKey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::Path;
 
 ///! Coordinator configuration struct
 ///
@@ -23,21 +23,28 @@ pub struct CoordConfig {
     pub(super) keylog: bool,
     pub(super) stateless_retry: bool,
     pub(super) cert_and_key: (CertificateChain, PrivateKey),
+    pub(super) client_ca: Option<Certificate>,
 }
 
 impl CoordConfig {
-    ///! Construct a new coordinator configuration
+    ///! Construct a new coordinator configuration from files.
     ///
-    /// - `cert_path` is the path to a certificate in PEM or DER format
-    /// - `key_path` is the path to the corresponding key in PEM or DER format
-    pub fn new(cert_path: PathBuf, key_path: PathBuf) -> Result<Self, CertReadError> {
-        let cert_and_key = get_cert_and_key(cert_path, key_path)?;
-        Ok(Self {
+    /// This is a conveniece wrapper around [CoordConfig::new].
+    /// Both PEM and DER formats are supported.
+    pub fn new_from_file(cert_path: &Path, key_path: &Path) -> Result<Self, CertReadError> {
+        let (cert, key, _) = get_cert_and_key(cert_path, key_path)?;
+        Ok(Self::new(cert, key))
+    }
+
+    ///! Construct a new coordinator configuration using the given CertificateChainand PrivateKey.
+    pub fn new(cert: CertificateChain, key: PrivateKey) -> Self {
+        Self {
             laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
             keylog: false,
             stateless_retry: false,
-            cert_and_key,
-        })
+            cert_and_key: (cert, key),
+            client_ca: None,
+        }
     }
 
     ///! Set listen port number to `port`
@@ -72,5 +79,24 @@ impl CoordConfig {
     pub fn enable_stateless_retry(&mut self) -> &mut Self {
         self.stateless_retry = true;
         self
+    }
+
+    ///! Add a trusted certificate authority for checking Client certificates
+    ///
+    /// If no trusted CA is provided, self-signed Client certificates are required.
+    pub fn set_client_ca(&mut self, ca: Certificate) -> &mut Self {
+        self.client_ca = Some(ca);
+        self
+    }
+
+    ///! Add a trusted certificate authority for checking Client certs from a file
+    ///
+    /// This is a convenience wrapper around [CoordConfig::set_client_ca].
+    /// Both PEM and DER formats are supported.
+    pub fn set_client_ca_from_file(
+        &mut self,
+        cert_path: &Path,
+    ) -> Result<&mut Self, CertReadError> {
+        Ok(self.set_client_ca(get_cert(cert_path)?))
     }
 }

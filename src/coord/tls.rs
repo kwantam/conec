@@ -16,16 +16,16 @@ use webpki::{
     TLSServerTrustAnchors, ECDSA_P256_SHA256,
 };
 
-struct AllowSelfSignedClientCert;
+struct ConecClientCertVerifier(Option<Vec<u8>>);
 
-impl AllowSelfSignedClientCert {
+impl ConecClientCertVerifier {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> Arc<dyn ClientCertVerifier> {
-        Arc::new(Self)
+    pub fn new(client_ca: Option<Vec<u8>>) -> Arc<dyn ClientCertVerifier> {
+        Arc::new(Self(client_ca))
     }
 }
 
-impl ClientCertVerifier for AllowSelfSignedClientCert {
+impl ClientCertVerifier for ConecClientCertVerifier {
     fn offer_client_auth(&self) -> bool {
         true
     }
@@ -48,13 +48,14 @@ impl ClientCertVerifier for AllowSelfSignedClientCert {
             return Err(TLSError::NoCertificatesPresented);
         }
         let cert_der = &presented_certs[0].0;
+        let trust_der = self.0.as_ref().unwrap_or(&presented_certs[0].0);
         let cert = EndEntityCert::from(cert_der).map_err(TLSError::WebPKIError)?;
         let time = webpki::Time::try_from(std::time::SystemTime::now())
             .map_err(|_| TLSError::FailedToGetCurrentTime)?;
         cert.verify_is_valid_tls_client_cert(
             &[&ECDSA_P256_SHA256],
             &TLSClientTrustAnchors(&[
-                cert_der_as_trust_anchor(cert_der).map_err(TLSError::WebPKIError)?
+                cert_der_as_trust_anchor(trust_der).map_err(TLSError::WebPKIError)?
             ]),
             &[],
             time,
@@ -63,7 +64,7 @@ impl ClientCertVerifier for AllowSelfSignedClientCert {
         cert.verify_is_valid_tls_server_cert(
             &[&ECDSA_P256_SHA256],
             &TLSServerTrustAnchors(&[
-                cert_der_as_trust_anchor(cert_der).map_err(TLSError::WebPKIError)?
+                cert_der_as_trust_anchor(trust_der).map_err(TLSError::WebPKIError)?
             ]),
             &[],
             time,
@@ -73,9 +74,9 @@ impl ClientCertVerifier for AllowSelfSignedClientCert {
     }
 }
 
-pub(super) fn build_rustls_server_config() -> Arc<ServerConfig> {
+pub(super) fn build_rustls_server_config(client_ca: Option<Vec<u8>>) -> Arc<ServerConfig> {
     Arc::new({
-        let mut tls_cfg = ServerConfig::new(AllowSelfSignedClientCert::new());
+        let mut tls_cfg = ServerConfig::new(ConecClientCertVerifier::new(client_ca));
         tls_cfg.versions = vec![rustls::ProtocolVersion::TLSv1_3];
         tls_cfg.max_early_data_size = u32::max_value();
         tls_cfg

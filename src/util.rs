@@ -16,7 +16,7 @@ use quinn::{Certificate, CertificateChain, ParseError, PrivateKey};
 use std::collections::VecDeque;
 use std::fs::read as fs_read;
 use std::io;
-use std::path::PathBuf;
+use std::path::Path;
 use std::task::{Context, Poll};
 
 #[derive(Debug, Error)]
@@ -70,27 +70,46 @@ pub enum CertReadError {
     ///! Failed to parse certificate or key
     #[error(display = "Parsing certificate or key: {:?}", _0)]
     ParsingCertOrKey(#[source] ParseError),
+    ///! Certificate chain is incomplete
+    #[error(display = "Certificate chain is incomplete")]
+    CertificateChain,
+}
+
+pub(crate) fn get_cert(cert_path: &Path) -> Result<Certificate, CertReadError> {
+    let tmp = fs_read(cert_path)?;
+    if cert_path.extension().map_or(false, |x| x == "der") {
+        Ok(Certificate::from_der(&tmp)?)
+    } else {
+        let chain = CertificateChain::from_pem(&tmp)?;
+        let cert_bytes = chain
+            .iter()
+            .next()
+            .ok_or(CertReadError::CertificateChain)?
+            .0
+            .clone();
+        Ok(Certificate::from_der(cert_bytes.as_ref())?)
+    }
 }
 
 pub(crate) fn get_cert_and_key(
-    cert_path: PathBuf,
-    key_path: PathBuf,
-) -> Result<(CertificateChain, PrivateKey), CertReadError> {
-    let key = {
-        let tmp = fs_read(&key_path)?;
+    cert_path: &Path,
+    key_path: &Path,
+) -> Result<(CertificateChain, PrivateKey, Vec<u8>), CertReadError> {
+    let (key, key_vec) = {
+        let tmp = fs_read(key_path)?;
         if key_path.extension().map_or(false, |x| x == "der") {
-            PrivateKey::from_der(&tmp)
+            (PrivateKey::from_der(&tmp)?, tmp)
         } else {
-            PrivateKey::from_pem(&tmp)
+            (PrivateKey::from_pem(&tmp)?, tmp)
         }
-    }?;
+    };
     let cert = {
-        let tmp = fs_read(&cert_path)?;
+        let tmp = fs_read(cert_path)?;
         if cert_path.extension().map_or(false, |x| x == "der") {
             CertificateChain::from_certs(Certificate::from_der(&tmp))
         } else {
             CertificateChain::from_pem(&tmp)?
         }
     };
-    Ok((cert, key))
+    Ok((cert, key, key_vec))
 }

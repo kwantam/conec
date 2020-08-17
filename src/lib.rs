@@ -143,6 +143,7 @@ For the coordinator, the first element of the returned 4-tuple is a
 must be from clients.
 */
 
+pub mod ca;
 pub mod client;
 pub mod coord;
 mod types;

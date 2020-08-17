@@ -9,13 +9,13 @@
 
 use crate::consts::DFLT_PORT;
 use crate::types::ConecConnAddr;
-//use crate::util::{get_cert_and_key, CertReadError};
+use crate::util::{get_cert, get_cert_and_key, CertReadError};
 
 use err_derive::Error;
 use quinn::{Certificate, CertificateChain, ParseError, PrivateKey};
 use rcgen::{generate_simple_self_signed, RcgenError};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-//use std::path::PathBuf;
+use std::path::Path;
 
 ///! Client configuration struct
 ///
@@ -27,6 +27,7 @@ pub struct ClientConfig {
     pub(super) addr: ConecConnAddr,
     pub(super) keylog: bool,
     pub(super) extra_ca: Option<Certificate>,
+    pub(super) client_ca: Option<Certificate>,
     pub(super) srcaddr: SocketAddr,
     pub(super) cert_and_key: Option<(CertificateChain, PrivateKey, Vec<u8>)>,
     pub(super) stateless_retry: bool,
@@ -62,6 +63,7 @@ impl ClientConfig {
             addr: ConecConnAddr::Portnum(DFLT_PORT),
             keylog: false,
             extra_ca: None,
+            client_ca: None,
             srcaddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
             cert_and_key: None,
             stateless_retry: false,
@@ -91,9 +93,38 @@ impl ClientConfig {
     }
 
     ///! Add a trusted certificate authority
+    ///
+    /// This certificate authority is used to validate the Coordinator's certificate.
     pub fn set_ca(&mut self, ca: Certificate) -> &mut Self {
         self.extra_ca = Some(ca);
         self
+    }
+
+    ///! Add a trusted certificate authority from a file
+    ///
+    /// This is a convenience wrapper around [ClientConfig::set_ca].
+    /// Both PEM and DER formats are supported.
+    pub fn set_ca_from_file(&mut self, cert_path: &Path) -> Result<&mut Self, CertReadError> {
+        Ok(self.set_ca(get_cert(cert_path)?))
+    }
+
+    ///! Add a trusted certificate authority for checking Client certs
+    ///
+    /// If no trusted CA is provided, self-signed Client certificates are required.
+    pub fn set_client_ca(&mut self, ca: Certificate) -> &mut Self {
+        self.client_ca = Some(ca);
+        self
+    }
+
+    ///! Add a trusted certificate authority for checking Client certs from a file
+    ///
+    /// This is a convenience wrapper around [ClientConfig::set_client_ca].
+    /// Both PEM and DER formats are supported.
+    pub fn set_client_ca_from_file(
+        &mut self,
+        cert_path: &Path,
+    ) -> Result<&mut Self, CertReadError> {
+        Ok(self.set_client_ca(get_cert(cert_path)?))
     }
 
     ///! Set the Client's source address explicitly
@@ -128,16 +159,43 @@ impl ClientConfig {
         self
     }
 
-    /*
-    ///! Set a certificate and key for Client's use
+    ///! Set a certificate and key for Client
     ///
-    /// This certificate is used when accepting direct connections from other clients.
-    pub fn set_cert(&mut self, cert_path: PathBuf, key_path: PathBuf) -> Result<&mut Self, CertReadError> {
-        let cert_and_key = get_cert_and_key(cert_path, key_path)?;
-        self.cert_and_key = Some(cert_and_key);
-        Ok(self)
+    /// This certificate is used to authenticate to the Coordinator and when accepting
+    /// direct connections from other clients.
+    ///
+    /// To be usable, a certificate must meet two criteria:
+    ///
+    /// - It must be valid for the Client `id` provided to [ClientConfig::new],
+    /// otherwise the coordinator will reject the connection.
+    ///
+    /// - If the Coordinator is configured to accept self-signed certificates
+    /// (which is the default), this certificate must be self-signed. Otherwise, if the
+    /// coordinator is configured to accept certificates signed by a particular CA
+    /// (via [CoordConfig::set_client_ca](crate::CoordConfig::set_client_ca)), this certificate must
+    /// be signed by that CA.
+    pub fn set_cert(
+        &mut self,
+        cert: CertificateChain,
+        key: PrivateKey,
+        key_der: Vec<u8>,
+    ) -> &mut Self {
+        self.cert_and_key = Some((cert, key, key_der));
+        self
     }
-    */
+
+    ///! Set a certificate and key for Client from file
+    ///
+    /// This is a convenience wrapper around [ClientConfig::set_cert].
+    /// Both PEM and DER formats are supported.
+    pub fn set_cert_from_file(
+        &mut self,
+        cert_path: &Path,
+        key_path: &Path,
+    ) -> Result<&mut Self, CertReadError> {
+        let (cert, key, key_der) = get_cert_and_key(cert_path, key_path)?;
+        Ok(self.set_cert(cert, key, key_der))
+    }
 
     pub(super) fn gen_certs(&mut self) -> Result<(), CertGenError> {
         if self.cert_and_key.is_some() {

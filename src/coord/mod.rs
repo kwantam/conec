@@ -30,8 +30,9 @@ use err_derive::Error;
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use quinn::{
-    crypto::rustls::TLSError, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
-    IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig, ServerConfigBuilder,
+    crypto::rustls::TLSError, Certificate, CertificateChain, ConnectionError, Endpoint,
+    EndpointError, Incoming, IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig,
+    ServerConfigBuilder,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -309,10 +310,11 @@ impl Coord {
         keylog: bool,
         certs: CertificateChain,
         key: PrivateKey,
+        client_ca: Option<Certificate>,
     ) -> Result<ServerConfig, TLSError> {
         let mut qscb = ServerConfigBuilder::new({
             let mut qsc = ServerConfig::default();
-            qsc.crypto = tls::build_rustls_server_config();
+            qsc.crypto = tls::build_rustls_server_config(client_ca.map(|c| c.as_der().to_vec()));
             qsc
         });
         qscb.protocols(ALPN_CONEC);
@@ -328,7 +330,13 @@ impl Coord {
     pub async fn new(config: CoordConfig) -> Result<(Self, IncomingStreams), CoordError> {
         // build configuration
         let (cert, key) = config.cert_and_key;
-        let qsc = Self::build_config(config.stateless_retry, config.keylog, cert, key)?;
+        let qsc = Self::build_config(
+            config.stateless_retry,
+            config.keylog,
+            cert,
+            key,
+            config.client_ca,
+        )?;
 
         // build QUIC endpoint
         let mut endpoint = Endpoint::builder();

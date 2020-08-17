@@ -7,9 +7,15 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use rand::{thread_rng, Rng};
-use rcgen::{KeyPair, BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa};
-use std::{convert::TryFrom, fs, io::{self, BufRead}, path};
+use conec::ca::{generate_ca, generate_cert};
+
+use rcgen::{Certificate, CertificateParams, KeyPair};
+use std::{
+    convert::TryFrom,
+    fs,
+    io::{self, BufRead},
+    path,
+};
 
 fn main() {
     let cacert = get_ca();
@@ -31,22 +37,10 @@ fn get_ca() -> Certificate {
         }
         _ => {
             println!("generating new CA cert and key");
-
-            let mut params = CertificateParams::default();
-            params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
-            params.serial_number = Some(thread_rng().gen());
-            params.distinguished_name = {
-                let mut tmp = DistinguishedName::new();
-                tmp.push(DnType::OrganizationName, "conec");
-                tmp.push(DnType::CommonName, "ca");
-                tmp
-            };
-            let cert = Certificate::from_params(params).unwrap();
-
+            let cert = generate_ca().unwrap();
             fs::create_dir_all(&path).unwrap();
             fs::write(&cert_path, cert.serialize_der().unwrap()).unwrap();
             fs::write(&key_path, cert.serialize_private_key_der()).unwrap();
-            
             cert
         }
     }
@@ -57,17 +51,8 @@ fn new_cert(name: String, ca: &Certificate) {
     let cert_path = path.join(&format!("{}_cert.der", name));
     let key_path = path.join(&format!("{}_key.der", name));
 
-    let mut params = CertificateParams::default();
-    params.serial_number = Some(thread_rng().gen());
-    params.distinguished_name = {
-        let mut tmp = DistinguishedName::new();
-        tmp.push(DnType::OrganizationName, "conec");
-        tmp.push(DnType::CommonName, &name);
-        tmp
-    };
-    let cert = Certificate::from_params(params).unwrap();
-
+    let (cert_bytes, key_bytes) = generate_cert(name, ca).unwrap();
     fs::create_dir_all(&path).unwrap();
-    fs::write(&cert_path, cert.serialize_der_with_signer(ca).unwrap()).unwrap();
-    fs::write(&key_path, cert.serialize_private_key_der()).unwrap();
+    fs::write(&cert_path, &cert_bytes).unwrap();
+    fs::write(&key_path, &key_bytes).unwrap();
 }

@@ -76,7 +76,7 @@ abstraction:
     - [x] direct Client <-> Coord streams
     - [ ] direct Client <-> Client channels
     - [ ] automagically pick client-to-client vs proxied streams
-    - [ ] Allow Coord to require trusted CA for client certs
+    - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
     - [ ] NAT ~detection~ traversal
         - probably not so hard: clone UdpSocket, send a few packets on a timer
