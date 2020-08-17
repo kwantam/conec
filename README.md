@@ -6,24 +6,23 @@
 
 ## high-level description
 
-This is a brand-new WIP repo in which I'll implement the following network
-abstraction:
-
 - A coordinated network channels instance comprises one Coordinator
   and one or more Clients.
 
   Clients know (by configuration) the identity of Coordinator (say,
   a hostname for which Coordinator has a TLS server cert).
 
-  (LATER) Clients could be authenticated, too. TLS client certs?
+  Clients authenticate to Coordinator either with a TLS certificate.
+  By default, clients generate ephemeral self-signed certificates;
+  they can also be configured to use long-lived certs signed by a
+  CA that Coordinator trusts.
 
 - The basic abstraction is a channel, which connects two entities
   (Client or Coordinator). A channel comprises one bi-directional
   control stream and zero or more bidirectional data streams.
 
   Every Client shares a channel with Coordinator: at startup, Client
-  connects to Coordinator. Clients can also share a channel with
-  other Clients; see below for how this works.
+  connects to Coordinator.
 
 - A data stream accepts a sequence of (known length) messages from
   its writer. The data stream's reader receives these messages
@@ -31,44 +30,17 @@ abstraction:
   a full message or nothing. No support for out-of-order reads;
   use multiple data streams instead.
 
-  (LATER) Not clear yet whether we should support both blocking and
-  non-blocking writing and reading. Probably makes sense, but let's
-  see how this shapes up before making a decision.
-
-- The control stream handles implementation-specific messaging used
-  to set up and tear down channels and streams. For example, when
-  one of a channel's endpoints wants to open a new data stream,
-  it sends a message over the control stream.
-
-  Coordinator has a special piece of functionality: it can send a new
-  channel to a Client (this is roughly analogous to sending a file
-  descriptor over a UNIX domain socket via sendmsg() and recvmsg()).
-  This is the only way that Client-Client channels can be established.
-
-  (LATER) When Coordinator sends a new channel connecting two Clients,
-  this should result in a new network connection between them. For now
-  I am assuming that Coordinator will just proxy all messages. Things
-  to consider, eventually: NAT traversal functionality?
-
-  (LATER) Is there any need for clients to send channels to other
-  clients? I am guessing / hoping no, but maybe I'm wrong.
-
-  (LATER) When Coordinator sends a new channel connecting Client
-  A to Client B, do A and B mutually authenticate? Do they encrypt
-  their communication to one another? (The second question is only
-  relevant if Coordinator is proxying messages.)
+- In this version, Coordinator proxies data streams between Clients.
+  In the future, Clients will be able to directly connect to one
+  another with Coordinator's help.
 
 ## TODOs / functionality / future features / maybes
 
-- error handling
-    - [x] eliminate `anyhow` in favor of unboxed Error types
-    - [x] create ConecError type to give better error msgs
-    - [x] switch to ConecError
 - basic functionality
     - [x] per-channel driver @ Coord
     - [x] Client connection: switch handshake order, detect dup-id earlier
     - [x] proxied streams through coordinator
-- future features and improvements
+- features and improvements
     - [x] for Client futures: `map(|x| x.map_err(FooError))` to get rid of multiple unwraps
     - [x] Client authentication via pubkeys
         - right now, client connects with ephemeral self-signed cert. once we
@@ -90,6 +62,10 @@ abstraction:
     - [x] switch ControlMsg -> CoCtrlMsg and ClCtrlMsg? (decision: no)
     - [x] switch from String to Bytes where possible to reduce copying?
         - decision: no: atomics are potentially worse than copies for <= 1kB
+    - error handling
+        - [x] eliminate `anyhow` in favor of unboxed Error types
+        - [x] create ConecError type to give better error msgs
+        - [x] switch to ConecError
 
 ## license
 
