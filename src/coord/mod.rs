@@ -66,7 +66,6 @@ pub enum CoordError {
 
 enum CoordEvent {
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
-    AcceptError(CoordError),
     ChanClose(String),
     NewCoStream(String, u32, ConnectingOutStreamHandle),
     NewStreamReq(String, String, u32),
@@ -101,24 +100,23 @@ impl CoordInner {
                     let sender = self.sender.clone();
                     tokio::spawn(async move {
                         use CoordError::*;
-                        use CoordEvent::*;
                         let (mut conn, mut ibi) = match incoming.await {
                             Err(e) => {
-                                sender.unbounded_send(AcceptError(Connect(e))).unwrap();
+                                tracing::warn!("AcceptError: {}", Connect(e));
                                 return;
                             }
                             Ok(conn) => ConecConn::new(conn),
                         };
                         let (ctrl, peer) = match conn.accept_ctrl(&mut ibi).await {
                             Err(e) => {
-                                sender.unbounded_send(AcceptError(Control(e))).unwrap();
+                                tracing::warn!("AcceptError: {}", Control(e));
                                 return;
                             }
                             Ok(ctrl_peer) => ctrl_peer,
                         };
                         sender
-                            .unbounded_send(Accepted(conn, ctrl, ibi, peer))
-                            .unwrap();
+                            .unbounded_send(CoordEvent::Accepted(conn, ctrl, ibi, peer))
+                            .ok();
                     });
                     Ok(())
                 }
@@ -138,9 +136,6 @@ impl CoordInner {
         loop {
             match self.events.poll_next_unpin(cx) {
                 Poll::Ready(Some(event)) => match event {
-                    AcceptError(e) => {
-                        tracing::warn!("got AcceptError: {}", e);
-                    }
                     Accepted(conn, ctrl, ibi, peer) => {
                         if self.clients.get(&peer).is_some() {
                             tokio::spawn(async move {
@@ -257,7 +252,7 @@ impl Clone for CoordRef {
 
 impl Drop for CoordRef {
     fn drop(&mut self) {
-        let inner = &mut *self.0.lock().unwrap();
+        let inner = &mut *self.lock().unwrap();
         if let Some(x) = inner.ref_count.checked_sub(1) {
             inner.ref_count = x;
             if x == 0 {

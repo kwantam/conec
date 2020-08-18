@@ -329,7 +329,7 @@ impl Clone for CoordChanRef {
 
 impl Drop for CoordChanRef {
     fn drop(&mut self) {
-        let inner = &mut *self.0.lock().unwrap();
+        let inner = &mut *self.lock().unwrap();
         if let Some(x) = inner.ref_count.checked_sub(1) {
             inner.ref_count = x;
             if x == 0 {
