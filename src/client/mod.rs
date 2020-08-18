@@ -15,6 +15,7 @@ See [library documentation](../index.html) for more info on how to instantiate a
 
 pub(crate) mod chan;
 pub(crate) mod config;
+mod ichan;
 mod istream;
 mod tls;
 
