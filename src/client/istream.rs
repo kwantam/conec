@@ -143,19 +143,16 @@ impl IncomingStreamsRef {
         client: oneshot::Sender<()>,
         bye: oneshot::Receiver<()>,
         streams: IncomingBiStreams,
-    ) -> (Self, mpsc::UnboundedReceiver<NewInStream>) {
-        let (sender, incoming) = mpsc::unbounded();
-        (
-            Self(Arc::new(Mutex::new(IncomingStreamsInner {
-                client: Some(client),
-                bye,
-                streams,
-                ref_count: 0,
-                driver: None,
-                sender,
-            }))),
-            incoming,
-        )
+        sender: mpsc::UnboundedSender<NewInStream>,
+    ) -> Self {
+        Self(Arc::new(Mutex::new(IncomingStreamsInner {
+            client: Some(client),
+            bye,
+            streams,
+            ref_count: 0,
+            driver: None,
+            sender,
+        })))
     }
 }
 

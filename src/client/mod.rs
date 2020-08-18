@@ -28,6 +28,7 @@ pub use istream::{IncomingStreams, NewInStream};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
+use futures::channel::mpsc;
 use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, Endpoint, EndpointError, ParseError};
 
 ///! Client::new constructor errors
@@ -102,7 +103,9 @@ impl From<Option<String>> for StreamPeer {
 pub struct Client {
     endpoint: Endpoint,
     #[allow(dead_code)]
-    incoming: IncomingStreamsRef,
+    in_streams: IncomingStreamsRef,
+    #[allow(dead_code)]
+    stream_sender: mpsc::UnboundedSender<NewInStream>,
     coord: ClientChan,
     ctr: u32,
 }
@@ -165,14 +168,16 @@ impl Client {
         let coord = ClientChan(coord);
 
         // set up the incoming streams listener
-        let (incoming, istrms) = IncomingStreamsRef::new(i_client, i_bye, ibi);
-        let driver = IncomingStreamsDriver(incoming.clone());
+        let (stream_sender, istrms) = mpsc::unbounded();
+        let in_streams = IncomingStreamsRef::new(i_client, i_bye, ibi, stream_sender.clone());
+        let driver = IncomingStreamsDriver(in_streams.clone());
         tokio::spawn(async move { driver.await });
 
         Ok((
             Self {
                 endpoint,
-                incoming,
+                in_streams,
+                stream_sender,
                 coord,
                 ctr: 1u32 << 31,
             },
