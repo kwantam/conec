@@ -184,7 +184,7 @@ impl Client {
     pub fn new_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.new_stream_with_sid(to, ctr)
+        self.new_stream_with_id(to, ctr)
     }
 
     ///! Open a new proxied stream to another client with an explicit stream-id
@@ -192,7 +192,7 @@ impl Client {
     /// The `sid` argument must be different for every call to this function for a given Client object.
     /// If mixing calls to this function with calls to [new_stream](Client::new_stream), avoid using
     /// `sid >= 1<<31`: those values are used automatically by that function.
-    pub fn new_stream_with_sid<T: Into<StreamPeer>>(&self, to: T, sid: u32) -> ConnectingOutStream {
+    pub fn new_stream_with_id<T: Into<StreamPeer>>(&self, to: T, sid: u32) -> ConnectingOutStream {
         self.coord.new_stream(to.into(), sid)
     }
 
@@ -200,13 +200,13 @@ impl Client {
     pub fn new_channel(&mut self, to: String) -> ConnectingChannel {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.new_channel_with_sid(to, ctr)
+        self.new_channel_with_id(to, ctr)
     }
 
     ///! Open a new channel directly to another client with an explicit channel-id
     ///
-    /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_sid].
-    pub fn new_channel_with_sid(&self, to: String, cid: u32) -> ConnectingChannel {
+    /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
+    pub fn new_channel_with_id(&self, to: String, cid: u32) -> ConnectingChannel {
         self.coord.new_channel(to, cid)
     }
 

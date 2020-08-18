@@ -370,7 +370,7 @@ fn test_stream_client_to_coord() {
 
         // should error if we try to reuse a sid, even with a different target
         assert!(client
-            .new_stream_with_sid("client1".to_string(), 1u32 << 31)
+            .new_stream_with_id("client1".to_string(), 1u32 << 31)
             .await
             .is_err());
 
