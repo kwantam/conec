@@ -114,8 +114,7 @@ impl Future for ConnectingOutStream {
         match inner.poll_unpin(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
-            Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(Ok(o))) => Poll::Ready(Ok(o)),
+            Poll::Ready(Ok(res)) => Poll::Ready(res),
         }
     }
 }

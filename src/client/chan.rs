@@ -19,6 +19,7 @@ use err_derive::Error;
 use futures::{channel::oneshot, prelude::*};
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -46,16 +47,33 @@ pub enum ClientChanError {
     WrongMessage(ControlMsg),
     ///! Coordinator sent us a message about a nonexistent stream-id
     #[error(display = "Coord response about nonexistent strmid {}", _0)]
-    NonexistentStream(u32),
+    NonexistentStrOrCh(u32),
     ///! Coordinator sent us a message about a stale stream-id
     #[error(display = "Coord response about stale strmid {}", _0)]
-    StaleStream(u32),
+    StaleStrOrCh(u32),
     ///! Incoming stream driver died
     #[error(display = "Incoming driver hung up")]
     IncomingDriverHup,
     ///! Keepalive timer disappeared unexpectedly
     #[error(display = "Keepalive timer disappered unexpectedly")]
     KeepaliveTimer,
+}
+
+///! A direct channel to a Client that is currently connecting
+pub struct ConnectingChannel(oneshot::Receiver<Result<(SocketAddr, Vec<u8>), OutStreamError>>);
+type ConnectingChannelHandle = oneshot::Sender<Result<(SocketAddr, Vec<u8>), OutStreamError>>;
+
+impl Future for ConnectingChannel {
+    type Output = Result<(SocketAddr, Vec<u8>), OutStreamError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let inner = &mut self.0;
+        match inner.poll_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
+            Poll::Ready(Ok(res)) => Poll::Ready(res),
+        }
+    }
 }
 
 pub(super) struct ClientChanInner {
@@ -67,6 +85,7 @@ pub(super) struct ClientChanInner {
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
     new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
+    new_channels: HashMap<u32, Option<ConnectingChannelHandle>>,
     flushing: bool,
     keepalive: Option<Interval>,
 }
@@ -112,7 +131,11 @@ impl ClientChanInner {
     }
 
     fn handle_events(&mut self, cx: &mut Context) -> Result<(), ClientChanError> {
-        match self.keepalive.as_mut().map_or(Poll::Pending, |k| k.poll_next_unpin(cx)) {
+        match self
+            .keepalive
+            .as_mut()
+            .map_or(Poll::Pending, |k| k.poll_next_unpin(cx))
+        {
             Poll::Pending => Ok(()),
             Poll::Ready(None) => Err(ClientChanError::KeepaliveTimer),
             Poll::Ready(Some(_)) => {
@@ -127,15 +150,18 @@ impl ClientChanInner {
         Ok(())
     }
 
-    fn get_new_stream(&mut self, sid: u32) -> Result<ConnectingOutStreamHandle, ClientChanError> {
-        if let Some(chan) = self.new_streams.get_mut(&sid) {
+    fn get_new_str_or_ch<T>(
+        sid: u32,
+        hash: &mut HashMap<u32, Option<T>>,
+    ) -> Result<T, ClientChanError> {
+        if let Some(chan) = hash.get_mut(&sid) {
             if let Some(chan) = chan.take() {
                 Ok(chan)
             } else {
-                Err(ClientChanError::StaleStream(sid))
+                Err(ClientChanError::StaleStrOrCh(sid))
             }
         } else {
-            Err(ClientChanError::NonexistentStream(sid))
+            Err(ClientChanError::NonexistentStrOrCh(sid))
         }
     }
 
@@ -150,13 +176,23 @@ impl ClientChanInner {
             }?;
             match msg {
                 ControlMsg::NewStreamOk(sid) => {
-                    let chan = self.get_new_stream(sid)?;
+                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
                     let sid = StreamTo::Client(sid);
                     self.new_stream(chan, sid);
                     Ok(())
                 }
                 ControlMsg::NewStreamErr(sid) => {
-                    let chan = self.get_new_stream(sid)?;
+                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
+                    chan.send(Err(OutStreamError::Coord)).ok();
+                    Ok(())
+                }
+                ControlMsg::NewChannelOk(sid, addr, cert) => {
+                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
+                    chan.send(Ok((addr, cert))).ok();
+                    Ok(())
+                }
+                ControlMsg::NewChannelErr(sid) => {
+                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
                     chan.send(Err(OutStreamError::Coord)).ok();
                     Ok(())
                 }
@@ -169,7 +205,7 @@ impl ClientChanInner {
                         tracing::warn!("ClientChanInner::drive_ctrl_recv: {:?}", err);
                         Ok(())
                     }
-                },
+                }
             }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -233,6 +269,7 @@ impl ClientChanRef {
                 driver: None,
                 to_send: VecDeque::new(),
                 new_streams: HashMap::new(),
+                new_channels: HashMap::new(),
                 flushing: false,
                 keepalive: None,
             }))),
@@ -249,7 +286,9 @@ impl ClientChanDriver {
     pub fn new(inner: ClientChanRef, keepalive: bool) -> Self {
         if keepalive {
             let inner_locked = &mut inner.lock().unwrap();
-            inner_locked.keepalive.replace(interval(Duration::new(6, 666666666)));
+            inner_locked
+                .keepalive
+                .replace(interval(Duration::new(6, 666666666)));
         }
         Self(inner)
     }
@@ -319,5 +358,21 @@ impl ClientChan {
         }
 
         ConnectingOutStream(receiver)
+    }
+
+    pub(super) fn new_channel(&self, to: String, sid: u32) -> ConnectingChannel {
+        // future that will return the result from the coordinator
+        let (sender, receiver) = oneshot::channel();
+        let inner = &mut *self.0.lock().unwrap();
+
+        if inner.new_channels.get(&sid).is_some() {
+            sender.send(Err(OutStreamError::StreamId)).ok();
+        } else {
+            inner.to_send.push_back(ControlMsg::NewChannelReq(to, sid));
+            inner.new_channels.insert(sid, Some(sender));
+            inner.wake();
+        }
+
+        ConnectingChannel(receiver)
     }
 }

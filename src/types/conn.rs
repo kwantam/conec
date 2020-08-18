@@ -43,7 +43,10 @@ pub enum ConecConnError {
     RecvHello(#[error(source, no_from)] CtrlStreamError),
 }
 
-pub(crate) struct ConecConn(Connection);
+pub(crate) struct ConecConn {
+    conn: Connection,
+    cert_bytes: Vec<u8>,
+}
 
 fn connect_with_option(
     endpoint: &Endpoint,
@@ -101,13 +104,19 @@ impl ConecConn {
             bi_streams: b_str,
             ..
         } = { nc };
-        (Self(conn), b_str)
+        (
+            Self {
+                conn,
+                cert_bytes: Vec::new(),
+            },
+            b_str,
+        )
     }
 
     pub(crate) async fn connect_ctrl(&mut self, id: String) -> Result<CtrlStream, ConecConnError> {
         // open a new control stream to newly connected client
         let (cc_send, cc_recv) = self
-            .0
+            .conn
             .open_bi()
             .await
             .map_err(ConecConnError::OpenBidiStream)?;
@@ -132,8 +141,11 @@ impl ConecConn {
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         // expect the client's hello back, check cert name, otherwise try to send client an error
-        let peer_certs = self.0.authentication_data().peer_certificates;
-        match ctrl_stream.recv_clhello(peer_certs).await {
+        let peer_certs = self.conn.authentication_data().peer_certificates;
+        match ctrl_stream
+            .recv_clhello(peer_certs, &mut self.cert_bytes)
+            .await
+        {
             Ok(peer) => Ok((ctrl_stream, peer)),
             Err(e) => {
                 ctrl_stream
@@ -147,10 +159,14 @@ impl ConecConn {
     }
 
     pub(crate) fn open_bi(&mut self) -> OpenBi {
-        self.0.open_bi()
+        self.conn.open_bi()
     }
 
     pub(crate) fn remote_addr(&self) -> SocketAddr {
-        self.0.remote_address()
+        self.conn.remote_address()
+    }
+
+    pub(crate) fn get_cert_bytes(&self) -> &[u8] {
+        self.cert_bytes.as_ref()
     }
 }

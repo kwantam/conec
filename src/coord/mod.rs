@@ -35,6 +35,7 @@ use quinn::{
     ServerConfigBuilder,
 };
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -74,6 +75,8 @@ enum CoordEvent {
         u32,
         Result<(SendStream, RecvStream), ConnectionError>,
     ),
+    NewChannelReq(String, String, u32),
+    NewChannelRes(String, u32, SocketAddr, Vec<u8>),
 }
 
 struct CoordInner {
@@ -191,6 +194,22 @@ impl CoordInner {
                             c_to.send(CoordChanEvent::BiOut(sid, handle));
                         } else {
                             handle.send(Err(OutStreamError::NoSuchPeer(to))).ok();
+                        }
+                    }
+                    NewChannelReq(from, to, sid) => {
+                        if let Some(c_to) = self.clients.get(&to) {
+                            c_to.send(CoordChanEvent::NCReq(from, sid));
+                        } else if let Some(c_from) = self.clients.get(&from) {
+                            c_from.send(CoordChanEvent::NCErr(sid));
+                        } else {
+                            tracing::warn!("NCReq clients disappeared: {}:{} -> {}", from, sid, to);
+                        }
+                    }
+                    NewChannelRes(to, sid, addr, cert) => {
+                        if let Some(c_to) = self.clients.get(&to) {
+                            c_to.send(CoordChanEvent::NCRes(sid, addr, cert));
+                        } else {
+                            tracing::warn!("NCRes client disappeared: {}:{}", to, sid);
                         }
                     }
                 },

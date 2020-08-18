@@ -20,6 +20,7 @@ use futures::{channel::mpsc, prelude::*};
 use quinn::{ConnectionError, IncomingBiStreams, RecvStream, SendStream};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -83,6 +84,9 @@ pub(super) enum CoordChanEvent {
     NSErr(u32),
     NSReq(String, u32),
     NSRes(u32, Result<(SendStream, RecvStream), ConnectionError>),
+    NCErr(u32),
+    NCReq(String, u32),
+    NCRes(u32, SocketAddr, Vec<u8>),
     BiIn(StreamTo, OutStream, InStream),
     BiOut(u32, ConnectingOutStreamHandle),
 }
@@ -118,10 +122,14 @@ impl CoordChanInner {
                     .coord
                     .unbounded_send(CoordEvent::NewStreamReq(self.peer.clone(), to, sid))
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
+                ControlMsg::NewChannelReq(to, sid) => self
+                    .coord
+                    .unbounded_send(CoordEvent::NewChannelReq(self.peer.clone(), to, sid))
+                    .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
                 ControlMsg::KeepAlive => {
                     self.to_send.push_back(ControlMsg::KeepAlive);
                     Ok(())
-                },
+                }
                 _ => {
                     let err = CoordChanError::WrongMessage(msg);
                     if STRICT_CTRL {
@@ -130,7 +138,7 @@ impl CoordChanInner {
                         tracing::warn!("CoordChanInner::drive_ctrl_recv: {:?}", err);
                         Ok(())
                     }
-                },
+                }
             }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -171,6 +179,17 @@ impl CoordChanInner {
                                 .ok();
                         });
                     }
+                    NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
+                    NCReq(to, sid) => {
+                        let addr = self.conn.remote_addr();
+                        let cert = self.conn.get_cert_bytes().to_vec();
+                        self.coord
+                            .unbounded_send(CoordEvent::NewChannelRes(to, sid, addr, cert))
+                            .ok();
+                    }
+                    NCRes(sid, addr, cert) => self
+                        .to_send
+                        .push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
                     BiIn(sid, n_send, n_recv) => match sid {
                         StreamTo::Client(sid) => {
                             if let Some((send, recv)) = self.new_streams.remove(&sid) {

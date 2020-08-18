@@ -21,8 +21,8 @@ mod tls;
 use crate::consts::ALPN_CONEC;
 use crate::types::{ConecConn, ConecConnError, ConnectingOutStream};
 use crate::Coord;
-pub use chan::ClientChanError;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
+pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
 pub use istream::{IncomingStreams, NewInStream};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
@@ -194,6 +194,20 @@ impl Client {
     /// `sid >= 1<<31`: those values are used automatically by that function.
     pub fn new_stream_with_sid<T: Into<StreamPeer>>(&self, to: T, sid: u32) -> ConnectingOutStream {
         self.coord.new_stream(to.into(), sid)
+    }
+
+    ///! Open a new channel directly to another client
+    pub fn new_channel(&mut self, to: String) -> ConnectingChannel {
+        let ctr = self.ctr;
+        self.ctr += 1;
+        self.new_channel_with_sid(to, ctr)
+    }
+
+    ///! Open a new channel directly to another client with an explicit channel-id
+    ///
+    /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_sid].
+    pub fn new_channel_with_sid(&self, to: String, cid: u32) -> ConnectingChannel {
+        self.coord.new_channel(to, cid)
     }
 
     ///! Return the local address that Client is bound to
