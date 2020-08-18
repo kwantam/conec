@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::StreamPeer;
-use crate::consts::MAX_LOOPS;
+use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
     ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
     OutStreamError, StreamTo,
@@ -161,7 +161,15 @@ impl ClientChanInner {
                     Ok(())
                 }
                 ControlMsg::KeepAlive => Ok(()),
-                _ => Err(ClientChanError::WrongMessage(msg)),
+                _ => {
+                    let err = ClientChanError::WrongMessage(msg);
+                    if STRICT_CTRL {
+                        Err(err)
+                    } else {
+                        tracing::warn!("ClientChanInner::drive_ctrl_recv: {:?}", err);
+                        Ok(())
+                    }
+                },
             }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {

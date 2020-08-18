@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::CoordEvent;
-use crate::consts::MAX_LOOPS;
+use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
     ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream, OutStream,
     OutStreamError, StreamTo,
@@ -122,7 +122,15 @@ impl CoordChanInner {
                     self.to_send.push_back(ControlMsg::KeepAlive);
                     Ok(())
                 },
-                _ => Err(CoordChanError::WrongMessage(msg)),
+                _ => {
+                    let err = CoordChanError::WrongMessage(msg);
+                    if STRICT_CTRL {
+                        Err(err)
+                    } else {
+                        tracing::warn!("CoordChanInner::drive_ctrl_recv: {:?}", err);
+                        Ok(())
+                    }
+                },
             }?;
             recvd += 1;
             if recvd >= MAX_LOOPS {
