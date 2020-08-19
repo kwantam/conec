@@ -143,11 +143,13 @@ For the coordinator, the first element of the returned 4-tuple is a
 must be from clients.
 */
 
+#[macro_use]
+mod util;
+
 pub mod ca;
 pub mod client;
 pub mod coord;
 mod types;
-mod util;
 
 #[cfg(test)]
 mod tests;

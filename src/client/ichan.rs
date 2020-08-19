@@ -7,8 +7,9 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use super::ClientClientChan;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ConecConnError, CtrlStream};
+use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 
 use err_derive::Error;
 use futures::channel::{mpsc, oneshot};
@@ -37,14 +38,6 @@ pub enum IncomingChannelsError {
     ///! Error connecting control channel to new Client
     #[error(display = "Error connecting control channel: {:?}", _0)]
     Control(#[source] ConecConnError),
-}
-
-/// Client-to-client channel
-pub struct ClientClientChan {
-    conn: ConecConn,
-    ctrl: CtrlStream,
-    ibi: IncomingBiStreams,
-    peer: String,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -126,9 +119,35 @@ impl IncomingChannelsInner {
                         self.certs.insert(peer, cert);
                     }
                     Accepted(conn, ctrl, ibi, peer) => {
-                        // loop up cert and make sure it's OK
+                        // check that cert client gave us is consistent with what Coord told us
+                        match self.certs.get(&peer) {
+                            Some(cert) if &cert[..] == conn.get_cert_bytes() => {
+                                // build and send ClientClientChan
+                                self.chan_out
+                                    .unbounded_send(ClientClientChan {
+                                        conn,
+                                        ctrl,
+                                        ibi,
+                                        peer,
+                                    })
+                                    .ok();
+                            }
+                            _ => {
+                                tokio::spawn(async move {
+                                    let mut ctrl = ctrl;
+                                    ctrl.send(ControlMsg::HelloError(
+                                        "certificate mismatch".to_string(),
+                                    ))
+                                    .await
+                                    .ok();
+                                    ctrl.finish().await.ok();
+                                    drop(ctrl);
+                                    drop(conn);
+                                });
+                            }
+                        }
                     }
-                }
+                },
             }
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -137,39 +156,16 @@ impl IncomingChannelsInner {
         }
         Ok(false)
     }
-}
 
-pub(super) struct IncomingChannelsRef(Arc<Mutex<IncomingChannelsInner>>);
-
-impl std::ops::Deref for IncomingChannelsRef {
-    type Target = Mutex<IncomingChannelsInner>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, IncomingChannelsError> {
+        let mut keep_going = false;
+        keep_going |= self.drive_accept(cx)?;
+        keep_going |= self.handle_events(cx)?;
+        Ok(keep_going)
     }
 }
 
-impl Clone for IncomingChannelsRef {
-    fn clone(&self) -> Self {
-        self.lock().unwrap().ref_count += 1;
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for IncomingChannelsRef {
-    fn drop(&mut self) {
-        let inner = &mut *self.lock().unwrap();
-        if let Some(x) = inner.ref_count.checked_sub(1) {
-            inner.ref_count = x;
-            if x == 0 {
-                if let Some(task) = inner.driver.take() {
-                    task.wake();
-                }
-            }
-        }
-    }
-}
-
+def_ref!(IncomingChannelsInner, IncomingChannelsRef);
 impl IncomingChannelsRef {
     pub(super) fn new(
         client: oneshot::Sender<()>,
@@ -192,35 +188,7 @@ impl IncomingChannelsRef {
     }
 }
 
-#[must_use = "IncomingChannelsDriver must be spawned!"]
-pub(super) struct IncomingChannelsDriver(pub(super) IncomingChannelsRef);
-
-impl Future for IncomingChannelsDriver {
-    type Output = Result<(), IncomingChannelsError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut *self.0.lock().unwrap();
-        match &inner.driver {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => inner.driver = Some(cx.waker().clone()),
-        };
-        loop {
-            let mut keep_going = false;
-            keep_going |= inner.drive_accept(cx)?;
-            keep_going |= inner.handle_events(cx)?;
-            if !keep_going {
-                break;
-            }
-        }
-        if inner.ref_count == 0 {
-            // I think we're alone now
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
+def_driver!(IncomingChannelsRef, IncomingChannelsDriver, IncomingChannelsError);
 impl Drop for IncomingChannelsDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();
@@ -228,3 +196,5 @@ impl Drop for IncomingChannelsDriver {
         inner.client.take().unwrap().send(()).ok();
     }
 }
+
+pub(super) struct IncomingChannels(pub(super) IncomingChannelsRef);

@@ -218,11 +218,16 @@ impl CoordInner {
         }
         false
     }
+
+    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, CoordError> {
+        let mut keep_going = false;
+        keep_going |= self.drive_accept(cx)?;
+        keep_going |= self.handle_events(cx);
+        Ok(keep_going)
+    }
 }
 
-// a shared reference to a Coordinator
-struct CoordRef(Arc<Mutex<CoordInner>>);
-
+def_ref!(CoordInner, CoordRef, pub(self));
 impl CoordRef {
     fn new(incoming: Incoming) -> (Self, IncomingStreams, mpsc::UnboundedSender<CoordEvent>) {
         let (sender, events) = mpsc::unbounded();
@@ -243,64 +248,7 @@ impl CoordRef {
     }
 }
 
-impl Clone for CoordRef {
-    fn clone(&self) -> Self {
-        self.lock().unwrap().ref_count += 1;
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for CoordRef {
-    fn drop(&mut self) {
-        let inner = &mut *self.lock().unwrap();
-        if let Some(x) = inner.ref_count.checked_sub(1) {
-            inner.ref_count = x;
-            if x == 0 {
-                if let Some(task) = inner.driver.take() {
-                    task.wake();
-                }
-            }
-        }
-    }
-}
-
-impl std::ops::Deref for CoordRef {
-    type Target = Mutex<CoordInner>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-#[must_use = "CoordDriver must be spawned!"]
-struct CoordDriver(CoordRef);
-
-impl Future for CoordDriver {
-    type Output = Result<(), CoordError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut *self.0.lock().unwrap();
-        match &inner.driver {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => {
-                inner.driver = Some(cx.waker().clone());
-            }
-        };
-        loop {
-            let mut keep_going = false;
-            keep_going |= inner.drive_accept(cx)?;
-            keep_going |= inner.handle_events(cx);
-            if !keep_going {
-                break;
-            }
-        }
-        if inner.ref_count == 0 && inner.clients.is_empty() {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
-    }
-}
+def_driver!(pub(self), CoordRef; pub(self), CoordDriver; CoordError);
 
 ///! A [Stream] of incoming data streams from Client or Coordinator.
 ///

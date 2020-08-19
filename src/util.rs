@@ -113,3 +113,66 @@ pub(crate) fn get_cert_and_key(
     };
     Ok((cert, key, key_vec))
 }
+
+macro_rules! def_ref {
+    ($i:ident, $r:tt) => ( def_ref!($i, $r, pub(super)); );
+    ($i:ident, $r:tt, $v:vis) => {
+        $v struct $r(Arc<Mutex<$i>>);
+
+        impl std::ops::Deref for $r {
+            type Target = Mutex<$i>;
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl Clone for $r {
+            fn clone(&self) -> Self {
+                self.lock().unwrap().ref_count += 1;
+                Self(self.0.clone())
+            }
+        }
+
+        impl Drop for $r {
+            fn drop(&mut self) {
+                let inner = &mut *self.lock().unwrap();
+                if let Some(x) = inner.ref_count.checked_sub(1) {
+                    inner.ref_count = x;
+                    if x == 0 {
+                        if let Some(task) = inner.driver.take() {
+                            task.wake();
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+macro_rules! def_driver {
+    ($r:ident, $d:tt, $e:ty) => ( def_driver!(pub(super), $r; pub(super), $d; $e); );
+    ($rv:vis, $r:ident; $dv:vis, $d:tt; $e:ty) => {
+        #[must_use = "$r must be spawned!"]
+        $dv struct $d($rv $r);
+        impl Future for $d {
+            type Output = Result<(), $e>;
+            fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+                let inner = &mut *self.0.lock().unwrap();
+                match &inner.driver {
+                    Some(w) if w.will_wake(cx.waker()) => (),
+                    _ => inner.driver = Some(cx.waker().clone()),
+                };
+                loop {
+                    if !inner.run_driver(cx)? {
+                        break;
+                    }
+                }
+                if inner.ref_count == 0 {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            }
+        }
+    };
+}

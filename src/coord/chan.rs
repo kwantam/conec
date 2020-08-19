@@ -308,39 +308,20 @@ impl CoordChanInner {
         }
         Ok(false)
     }
-}
 
-pub(super) struct CoordChanRef(Arc<Mutex<CoordChanInner>>);
-
-impl std::ops::Deref for CoordChanRef {
-    type Target = Mutex<CoordChanInner>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Clone for CoordChanRef {
-    fn clone(&self) -> Self {
-        self.lock().unwrap().ref_count += 1;
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for CoordChanRef {
-    fn drop(&mut self) {
-        let inner = &mut *self.lock().unwrap();
-        if let Some(x) = inner.ref_count.checked_sub(1) {
-            inner.ref_count = x;
-            if x == 0 {
-                if let Some(task) = inner.driver.take() {
-                    task.wake();
-                }
-            }
+    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
+        let mut keep_going = false;
+        keep_going |= self.drive_ctrl_recv(cx)?;
+        keep_going |= self.handle_events(cx);
+        if !self.to_send.is_empty() || self.flushing {
+            keep_going |= self.drive_ctrl_send(cx)?;
         }
+        keep_going |= self.drive_ibi_recv(cx)?;
+        Ok(keep_going)
     }
 }
 
+def_ref!(CoordChanInner, CoordChanRef);
 impl CoordChanRef {
     pub(super) fn new(
         conn: ConecConn,
@@ -376,39 +357,7 @@ impl CoordChanRef {
     }
 }
 
-#[must_use = "CoordChanDriver must be spawned!"]
-pub(super) struct CoordChanDriver(pub(super) CoordChanRef);
-
-impl Future for CoordChanDriver {
-    type Output = Result<(), CoordChanError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut *self.0.lock().unwrap();
-        match &inner.driver {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => inner.driver = Some(cx.waker().clone()),
-        };
-        loop {
-            let mut keep_going = false;
-            keep_going |= inner.drive_ctrl_recv(cx)?;
-            keep_going |= inner.handle_events(cx);
-            if !inner.to_send.is_empty() || inner.flushing {
-                keep_going |= inner.drive_ctrl_send(cx)?;
-            }
-            keep_going |= inner.drive_ibi_recv(cx)?;
-            if !keep_going {
-                break;
-            }
-        }
-        if inner.ref_count == 0 {
-            // driver is the only one left holding a ref to CoordChan; kill driver
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
+def_driver!(CoordChanRef, CoordChanDriver, CoordChanError);
 impl Drop for CoordChanDriver {
     fn drop(&mut self) {
         let inner = self.0.lock().unwrap();

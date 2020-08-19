@@ -46,8 +46,8 @@ pub enum IncomingStreamsError {
 }
 
 pub(super) struct IncomingStreamsInner {
-    client: Option<oneshot::Sender<()>>,
-    bye: oneshot::Receiver<()>,
+    chan_bye_out: Option<oneshot::Sender<()>>,
+    chan_bye_in: oneshot::Receiver<()>,
     streams: IncomingBiStreams,
     ref_count: usize,
     driver: Option<Waker>,
@@ -61,7 +61,7 @@ impl IncomingStreamsInner {
             _ => Ok(()),
         }?;
 
-        match self.bye.poll_unpin(cx) {
+        match self.chan_bye_in.poll_unpin(cx) {
             Poll::Pending => Ok(()),
             _ => Err(IncomingStreamsError::ClientClosed),
         }?;
@@ -105,49 +105,23 @@ impl IncomingStreamsInner {
         }
         Ok(false)
     }
-}
 
-pub(super) struct IncomingStreamsRef(Arc<Mutex<IncomingStreamsInner>>);
-
-impl std::ops::Deref for IncomingStreamsRef {
-    type Target = Mutex<IncomingStreamsInner>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
+        self.drive_streams_recv(cx)
     }
 }
 
-impl Clone for IncomingStreamsRef {
-    fn clone(&self) -> Self {
-        self.lock().unwrap().ref_count += 1;
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for IncomingStreamsRef {
-    fn drop(&mut self) {
-        let inner = &mut *self.lock().unwrap();
-        if let Some(x) = inner.ref_count.checked_sub(1) {
-            inner.ref_count = x;
-            if x == 0 {
-                if let Some(task) = inner.driver.take() {
-                    task.wake();
-                }
-            }
-        }
-    }
-}
-
+def_ref!(IncomingStreamsInner, IncomingStreamsRef);
 impl IncomingStreamsRef {
     pub(super) fn new(
-        client: oneshot::Sender<()>,
-        bye: oneshot::Receiver<()>,
+        chan_bye_out: oneshot::Sender<()>,
+        chan_bye_in: oneshot::Receiver<()>,
         streams: IncomingBiStreams,
         sender: mpsc::UnboundedSender<NewInStream>,
     ) -> Self {
         Self(Arc::new(Mutex::new(IncomingStreamsInner {
-            client: Some(client),
-            bye,
+            chan_bye_out: Some(chan_bye_out),
+            chan_bye_in,
             streams,
             ref_count: 0,
             driver: None,
@@ -156,36 +130,11 @@ impl IncomingStreamsRef {
     }
 }
 
-#[must_use = "IncomingStreamsDriver must be spawned!"]
-pub(super) struct IncomingStreamsDriver(pub(super) IncomingStreamsRef);
-
-impl Future for IncomingStreamsDriver {
-    type Output = Result<(), IncomingStreamsError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut *self.0.lock().unwrap();
-        match &inner.driver {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => inner.driver = Some(cx.waker().clone()),
-        };
-        loop {
-            if !inner.drive_streams_recv(cx)? {
-                break;
-            }
-        }
-        if inner.ref_count == 0 {
-            // driver is alone now; die
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
+def_driver!(IncomingStreamsRef, IncomingStreamsDriver, IncomingStreamsError);
 impl Drop for IncomingStreamsDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();
         // tell the coord chan eriver that we died
-        inner.client.take().unwrap().send(()).ok();
+        inner.chan_bye_out.take().unwrap().send(()).ok();
     }
 }

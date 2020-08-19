@@ -51,9 +51,9 @@ pub enum ClientChanError {
     ///! Coordinator sent us a message about a stale stream-id
     #[error(display = "Coord response about stale strmid {}", _0)]
     StaleStrOrCh(u32),
-    ///! Incoming stream driver died
-    #[error(display = "Incoming driver hung up")]
-    IncomingDriverHup,
+    ///! Another client driver died
+    #[error(display = "Another client driver died")]
+    OtherDriverHup,
     ///! Keepalive timer disappeared unexpectedly
     #[error(display = "Keepalive timer disappered unexpectedly")]
     KeepaliveTimer,
@@ -79,8 +79,8 @@ impl Future for ConnectingChannel {
 pub(super) struct ClientChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
-    incs_bye_in: oneshot::Receiver<()>,
     incs_bye_out: Option<oneshot::Sender<()>>,
+    incs_bye_in: oneshot::Receiver<()>,
     ref_count: usize,
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
@@ -145,7 +145,7 @@ impl ClientChanInner {
         }?;
         match self.incs_bye_in.poll_unpin(cx) {
             Poll::Pending => Ok(()),
-            _ => Err(ClientChanError::IncomingDriverHup),
+            _ => Err(ClientChanError::OtherDriverHup),
         }?;
         Ok(())
     }
@@ -219,39 +219,19 @@ impl ClientChanInner {
         util::drive_ctrl_send(cx, &mut self.flushing, &mut self.ctrl, &mut self.to_send)
             .map_err(ClientChanError::Sink)
     }
-}
 
-pub(super) struct ClientChanRef(Arc<Mutex<ClientChanInner>>);
-
-impl std::ops::Deref for ClientChanRef {
-    type Target = Mutex<ClientChanInner>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Clone for ClientChanRef {
-    fn clone(&self) -> Self {
-        self.lock().unwrap().ref_count += 1;
-        Self(self.0.clone())
-    }
-}
-
-impl Drop for ClientChanRef {
-    fn drop(&mut self) {
-        let inner = &mut *self.lock().unwrap();
-        if let Some(x) = inner.ref_count.checked_sub(1) {
-            inner.ref_count = x;
-            if x == 0 {
-                if let Some(task) = inner.driver.take() {
-                    task.wake();
-                }
-            }
+    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
+        let mut keep_going = false;
+        self.handle_events(cx)?;
+        keep_going |= self.drive_ctrl_recv(cx)?;
+        if !self.to_send.is_empty() || self.flushing {
+            keep_going |= self.drive_ctrl_send(cx)?;
         }
+        Ok(keep_going)
     }
 }
 
+def_ref!(ClientChanInner, ClientChanRef);
 impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
@@ -263,8 +243,8 @@ impl ClientChanRef {
             Self(Arc::new(Mutex::new(ClientChanInner {
                 conn,
                 ctrl,
-                incs_bye_in,
                 incs_bye_out: Some(incs_bye_out),
+                incs_bye_in,
                 ref_count: 0,
                 driver: None,
                 to_send: VecDeque::new(),
@@ -279,9 +259,7 @@ impl ClientChanRef {
     }
 }
 
-#[must_use = "ClientChanDriver must be spawned!"]
-pub(super) struct ClientChanDriver(ClientChanRef);
-
+def_driver!(pub(self), ClientChanRef; pub(super), ClientChanDriver; ClientChanError);
 impl ClientChanDriver {
     pub fn new(inner: ClientChanRef, keepalive: bool) -> Self {
         if keepalive {
@@ -291,35 +269,6 @@ impl ClientChanDriver {
                 .replace(interval(Duration::new(6, 666666666)));
         }
         Self(inner)
-    }
-}
-
-impl Future for ClientChanDriver {
-    type Output = Result<(), ClientChanError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut *self.0.lock().unwrap();
-        match &inner.driver {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => inner.driver = Some(cx.waker().clone()),
-        };
-        loop {
-            let mut keep_going = false;
-            inner.handle_events(cx)?;
-            keep_going |= inner.drive_ctrl_recv(cx)?;
-            if !inner.to_send.is_empty() || inner.flushing {
-                keep_going |= inner.drive_ctrl_send(cx)?;
-            }
-            if !keep_going {
-                break;
-            }
-        }
-        if inner.ref_count == 0 {
-            // driver is lonely
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
     }
 }
 
