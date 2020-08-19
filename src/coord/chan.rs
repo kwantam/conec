@@ -82,7 +82,7 @@ pub(super) enum CoordChanEvent {
     NSReq(String, u32),
     NSRes(u32, Result<(SendStream, RecvStream), ConnectionError>),
     NCErr(u32),
-    NCReq(String, u32),
+    NCReq(String, u32, Vec<u8>),
     NCRes(u32, SocketAddr, Vec<u8>),
     BiIn(StreamTo, OutStream, InStream),
     BiOut(u32, ConnectingOutStreamHandle),
@@ -106,7 +106,23 @@ impl CoordChanInner {
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
                 ControlMsg::NewChannelReq(to, sid) => self
                     .coord
-                    .unbounded_send(CoordEvent::NewChannelReq(self.peer.clone(), to, sid))
+                    .unbounded_send(CoordEvent::NewChannelReq(
+                        self.peer.clone(),
+                        to,
+                        sid,
+                        self.conn.get_cert_bytes().to_vec(),
+                    ))
+                    .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
+                ControlMsg::CertOk(to, sid) => {
+                    let addr = self.conn.remote_addr();
+                    let cert = self.conn.get_cert_bytes().to_vec();
+                    self.coord
+                        .unbounded_send(CoordEvent::NewChannelRes(to, sid, addr, cert))
+                        .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error()))
+                }
+                ControlMsg::CertNok(to, sid) => self
+                    .coord
+                    .unbounded_send(CoordEvent::NewChannelErr(to, sid))
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
                 ControlMsg::KeepAlive => {
                     self.to_send.push_back(ControlMsg::KeepAlive);
@@ -162,12 +178,8 @@ impl CoordChanInner {
                         });
                     }
                     NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
-                    NCReq(to, sid) => {
-                        let addr = self.conn.remote_addr();
-                        let cert = self.conn.get_cert_bytes().to_vec();
-                        self.coord
-                            .unbounded_send(CoordEvent::NewChannelRes(to, sid, addr, cert))
-                            .ok();
+                    NCReq(to, sid, cert) => {
+                        self.to_send.push_back(ControlMsg::CertReq(to, sid, cert))
                     }
                     NCRes(sid, addr, cert) => self
                         .to_send

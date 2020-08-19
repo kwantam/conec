@@ -7,13 +7,13 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::ClientClientChan;
+use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
+use super::NewInStream;
 use crate::consts::MAX_LOOPS;
 use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 
 use err_derive::Error;
-use futures::channel::{mpsc, oneshot};
-use futures::prelude::*;
+use futures::{channel::mpsc, prelude::*};
 use quinn::{ConnectionError, Incoming, IncomingBiStreams};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -41,19 +41,21 @@ pub enum IncomingChannelsError {
 }
 
 #[allow(clippy::large_enum_variant)]
-enum IncomingChannelsEvent {
+pub(super) enum IncomingChannelsEvent {
     Certificate(String, Vec<u8>),
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
 }
 
 pub(super) struct IncomingChannelsInner {
-    client: Option<oneshot::Sender<()>>,
-    bye: oneshot::Receiver<()>,
+    id: String,
+    keepalive: bool,
+    bye: mpsc::UnboundedSender<()>,
     channels: Incoming,
     ref_count: usize,
     driver: Option<Waker>,
     certs: HashMap<String, Vec<u8>>,
     chan_out: mpsc::UnboundedSender<ClientClientChan>,
+    strm_out: mpsc::UnboundedSender<NewInStream>,
     sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
     events: mpsc::UnboundedReceiver<IncomingChannelsEvent>,
 }
@@ -104,9 +106,9 @@ impl IncomingChannelsInner {
             _ => Ok(()),
         }?;
 
-        match self.bye.poll_unpin(cx) {
-            Poll::Pending => Ok(()),
-            _ => Err(IncomingChannelsError::ClientClosed),
+        match self.bye.poll_ready_unpin(cx) {
+            Poll::Ready(Err(_)) => Err(IncomingChannelsError::ClientClosed),
+            _ => Ok(()),
         }?;
 
         let mut recvd = 0;
@@ -122,15 +124,18 @@ impl IncomingChannelsInner {
                         // check that cert client gave us is consistent with what Coord told us
                         match self.certs.get(&peer) {
                             Some(cert) if &cert[..] == conn.get_cert_bytes() => {
+                                let inner = ClientClientChanRef::new(
+                                    conn,
+                                    ctrl,
+                                    ibi,
+                                    self.id.clone(),
+                                    self.strm_out.clone(),
+                                );
+                                let driver =
+                                    ClientClientChanDriver::new(inner.clone(), self.keepalive);
+                                tokio::spawn(async move { driver.await });
                                 // build and send ClientClientChan
-                                self.chan_out
-                                    .unbounded_send(ClientClientChan {
-                                        conn,
-                                        ctrl,
-                                        ibi,
-                                        peer,
-                                    })
-                                    .ok();
+                                self.chan_out.unbounded_send(ClientClientChan(inner)).ok();
                             }
                             _ => {
                                 tokio::spawn(async move {
@@ -172,23 +177,30 @@ impl IncomingChannelsInner {
 def_ref!(IncomingChannelsInner, IncomingChannelsRef);
 impl IncomingChannelsRef {
     pub(super) fn new(
-        client: oneshot::Sender<()>,
-        bye: oneshot::Receiver<()>,
+        id: String,
+        keepalive: bool,
+        bye: mpsc::UnboundedSender<()>,
         channels: Incoming,
         chan_out: mpsc::UnboundedSender<ClientClientChan>,
-    ) -> Self {
+        strm_out: mpsc::UnboundedSender<NewInStream>,
+    ) -> (Self, mpsc::UnboundedSender<IncomingChannelsEvent>) {
         let (sender, events) = mpsc::unbounded();
-        Self(Arc::new(Mutex::new(IncomingChannelsInner {
-            client: Some(client),
-            bye,
-            channels,
-            ref_count: 0,
-            driver: None,
-            certs: HashMap::new(),
-            chan_out,
+        (
+            Self(Arc::new(Mutex::new(IncomingChannelsInner {
+                id,
+                keepalive,
+                bye,
+                channels,
+                ref_count: 0,
+                driver: None,
+                certs: HashMap::new(),
+                chan_out,
+                strm_out,
+                sender: sender.clone(),
+                events,
+            }))),
             sender,
-            events,
-        })))
+        )
     }
 }
 
@@ -199,10 +211,8 @@ def_driver!(
 );
 impl Drop for IncomingChannelsDriver {
     fn drop(&mut self) {
-        let mut inner = self.0.lock().unwrap();
+        let inner = self.0.lock().unwrap();
         // tell client we died
-        inner.client.take().unwrap().send(()).ok();
+        inner.bye.unbounded_send(()).ok();
     }
 }
-
-pub(super) struct IncomingChannels(pub(super) IncomingChannelsRef);

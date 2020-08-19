@@ -11,8 +11,7 @@ use crate::consts::MAX_LOOPS;
 use crate::types::{InStream, OutStream};
 
 use err_derive::Error;
-use futures::channel::{mpsc, oneshot};
-use futures::prelude::*;
+use futures::{channel::mpsc, prelude::*};
 use quinn::{ConnectionError, IncomingBiStreams, RecvStream, SendStream};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -46,12 +45,11 @@ pub enum IncomingStreamsError {
 }
 
 pub(super) struct IncomingStreamsInner {
-    chan_bye_out: Option<oneshot::Sender<()>>,
-    chan_bye_in: oneshot::Receiver<()>,
-    streams: IncomingBiStreams,
+    ibi: IncomingBiStreams,
     ref_count: usize,
     driver: Option<Waker>,
     sender: mpsc::UnboundedSender<NewInStream>,
+    bye: mpsc::UnboundedSender<()>,
 }
 
 impl IncomingStreamsInner {
@@ -67,13 +65,13 @@ impl IncomingStreamsInner {
             );
             let (peer, chanid) = match read_stream.try_next().await {
                 Err(e) => {
-                    tracing::warn!("drive_streams_recv: {:?}", e);
+                    tracing::warn!("stream_init: {:?}", e);
                     return;
                 }
                 Ok(msg) => match msg {
                     Some(peer_chanid) => peer_chanid,
                     None => {
-                        tracing::warn!("drive_streams_recv: unexpected end of stream");
+                        tracing::warn!("stream_init: unexpected end of stream");
                         return;
                     }
                 },
@@ -92,16 +90,16 @@ impl IncomingStreamsInner {
             _ => Ok(()),
         }?;
 
-        match self.chan_bye_in.poll_unpin(cx) {
-            Poll::Pending => Ok(()),
-            _ => Err(IncomingStreamsError::ClientClosed),
+        match self.bye.poll_ready_unpin(cx) {
+            Poll::Ready(Err(_)) => Err(IncomingStreamsError::ClientClosed),
+            _ => Ok(()),
         }
     }
 
     fn drive_streams_recv(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
         let mut recvd = 0;
         loop {
-            let (send, recv) = match self.streams.poll_next_unpin(cx) {
+            let (send, recv) = match self.ibi.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => Err(IncomingStreamsError::EndOfBiStream),
                 Poll::Ready(Some(r)) => r.map_err(IncomingStreamsError::AcceptBiStream),
@@ -129,18 +127,16 @@ impl IncomingStreamsInner {
 def_ref!(IncomingStreamsInner, IncomingStreamsRef);
 impl IncomingStreamsRef {
     pub(super) fn new(
-        chan_bye_out: oneshot::Sender<()>,
-        chan_bye_in: oneshot::Receiver<()>,
-        streams: IncomingBiStreams,
+        ibi: IncomingBiStreams,
         sender: mpsc::UnboundedSender<NewInStream>,
+        bye: mpsc::UnboundedSender<()>,
     ) -> Self {
         Self(Arc::new(Mutex::new(IncomingStreamsInner {
-            chan_bye_out: Some(chan_bye_out),
-            chan_bye_in,
-            streams,
+            ibi,
             ref_count: 0,
             driver: None,
             sender,
+            bye,
         })))
     }
 }
@@ -152,8 +148,8 @@ def_driver!(
 );
 impl Drop for IncomingStreamsDriver {
     fn drop(&mut self) {
-        let mut inner = self.0.lock().unwrap();
+        let inner = self.0.lock().unwrap();
         // tell the coord chan eriver that we died
-        inner.chan_bye_out.take().unwrap().send(()).ok();
+        inner.bye.unbounded_send(()).ok();
     }
 }

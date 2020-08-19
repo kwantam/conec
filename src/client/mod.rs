@@ -27,6 +27,8 @@ use cchan::ClientClientChan;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
+pub use ichan::IncomingChannelsError;
+use ichan::{IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
@@ -47,8 +49,8 @@ pub enum ClientError {
     #[error(display = "Connecting to coordinator: {:?}", _0)]
     Connect(#[source] ConecConnError),
     ///! Accepting control stream from Coordinator failed
-    #[error(display = "Accepting control stream from coordinator: {:?}", _0)]
-    AcceptCtrl(#[error(source, no_from)] ConecConnError),
+    #[error(display = "Connecting control stream to coordinator: {:?}", _0)]
+    Control(#[error(source, no_from)] ConecConnError),
     ///! Generating certificate for client failed
     #[error(display = "Generating certificate for client: {:?}", _0)]
     CertificateGen(#[source] CertGenError),
@@ -108,9 +110,12 @@ pub struct Client {
     #[allow(dead_code)]
     in_streams: IncomingStreamsRef,
     #[allow(dead_code)]
-    stream_sender: mpsc::UnboundedSender<NewInStream>,
+    in_channels: Option<IncomingChannelsRef>,
+    #[allow(dead_code)]
     coord: ClientChan,
     ctr: u32,
+    bye: mpsc::UnboundedReceiver<()>,
+    chan_in: mpsc::UnboundedReceiver<ClientClientChan>,
 }
 
 impl Client {
@@ -152,7 +157,7 @@ impl Client {
             )?;
             endpoint.listen(qsc);
         }
-        let (mut endpoint, _incoming) = endpoint.bind(&config.srcaddr)?;
+        let (mut endpoint, incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
         let (mut conn, ibi) =
@@ -160,29 +165,53 @@ impl Client {
 
         // set up the control stream with the coordinator
         let ctrl = conn
-            .connect_ctrl(config.id)
+            .connect_ctrl(config.id.clone())
             .await
-            .map_err(ClientError::AcceptCtrl)?;
+            .map_err(ClientError::Control)?;
 
-        // set up the client-coordinator channel and spawn its driver
-        let (coord, i_client, i_bye) = ClientChanRef::new(conn, ctrl);
+        let (bye_sender, bye) = mpsc::unbounded();
+        let (stream_sender, istrms) = mpsc::unbounded();
+        let (chan_out, chan_in) = mpsc::unbounded();
+
+        // incoming channels listener
+        let (in_channels, cert_sender) = if config.listen {
+            let (in_channels, cert_sender) = IncomingChannelsRef::new(
+                config.id,
+                config.keepalive,
+                bye_sender.clone(),
+                incoming,
+                chan_out,
+                stream_sender.clone(),
+            );
+            let driver = IncomingChannelsDriver(in_channels.clone());
+            tokio::spawn(async move { driver.await });
+            (Some(in_channels), Some(cert_sender))
+        } else {
+            (None, None)
+        };
+
+        // client-coordinator channel
+        let coord = ClientChanRef::new(conn, ctrl, bye_sender.clone(), cert_sender);
         let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
         tokio::spawn(async move { driver.await });
         let coord = ClientChan(coord);
 
         // set up the incoming streams listener
-        let (stream_sender, istrms) = mpsc::unbounded();
-        let in_streams = IncomingStreamsRef::new(i_client, i_bye, ibi, stream_sender.clone());
+        let in_streams = IncomingStreamsRef::new(ibi, stream_sender, bye_sender);
         let driver = IncomingStreamsDriver(in_streams.clone());
         tokio::spawn(async move { driver.await });
+
+        // set up the incoming channels listener
 
         Ok((
             Self {
                 endpoint,
                 in_streams,
-                stream_sender,
+                in_channels,
                 coord,
                 ctr: 1u32 << 31,
+                bye,
+                chan_in,
             },
             istrms,
         ))

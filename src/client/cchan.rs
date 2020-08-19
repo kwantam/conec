@@ -10,14 +10,15 @@
 use super::istream::{IncomingStreamsInner, NewInStream};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    outstream_init, ConecConn, ConnectingOutStream, ControlMsg,
-    CtrlStream, OutStreamError,
+    outstream_init, ConecConn, ConnectingOutStream, ControlMsg, CtrlStream, OutStreamError,
 };
 use crate::util;
 
 use err_derive::Error;
-use futures::channel::{mpsc, oneshot};
-use futures::prelude::*;
+use futures::{
+    channel::{mpsc, oneshot},
+    prelude::*,
+};
 use quinn::{ConnectionError, IncomingBiStreams};
 use std::collections::{HashSet, VecDeque};
 use std::io;
@@ -54,14 +55,6 @@ pub enum ClientClientChanError {
     ///! Error while accepting new stream from transport
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
-}
-
-/// Client-to-client channel
-pub(super) struct ClientClientChan {
-    pub(super) conn: ConecConn,
-    pub(super) ctrl: CtrlStream,
-    pub(super) ibi: IncomingBiStreams,
-    pub(super) peer: String,
 }
 
 pub(super) struct ClientClientChanInner {
@@ -205,9 +198,9 @@ impl ClientClientChanDriver {
     }
 }
 
-pub(super) struct CClientClientChan(pub(super) ClientClientChanRef);
+pub(super) struct ClientClientChan(pub(super) ClientClientChanRef);
 
-impl CClientClientChan {
+impl ClientClientChan {
     // XXX sid should also be unique w.r.t. proxied streams!!!
     //     maybe: push uniqueness check up into Client?
     pub(super) fn new_stream(&self, sid: u32) -> ConnectingOutStream {

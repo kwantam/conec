@@ -27,8 +27,10 @@ pub use chan::{CoordChanError, NewInStream};
 use config::CoordConfig;
 
 use err_derive::Error;
-use futures::channel::{mpsc, oneshot};
-use futures::prelude::*;
+use futures::{
+    channel::{mpsc, oneshot},
+    prelude::*,
+};
 use quinn::{
     crypto::rustls::TLSError, Certificate, CertificateChain, ConnectionError, Endpoint,
     EndpointError, Incoming, IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig,
@@ -74,8 +76,9 @@ enum CoordEvent {
         u32,
         Result<(SendStream, RecvStream), ConnectionError>,
     ),
-    NewChannelReq(String, String, u32),
+    NewChannelReq(String, String, u32, Vec<u8>),
     NewChannelRes(String, u32, SocketAddr, Vec<u8>),
+    NewChannelErr(String, u32),
 }
 
 struct CoordInner {
@@ -191,9 +194,9 @@ impl CoordInner {
                             handle.send(Err(OutStreamError::NoSuchPeer(to))).ok();
                         }
                     }
-                    NewChannelReq(from, to, sid) => {
+                    NewChannelReq(from, to, sid, cert) => {
                         if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::NCReq(from, sid));
+                            c_to.send(CoordChanEvent::NCReq(from, sid, cert));
                         } else if let Some(c_from) = self.clients.get(&from) {
                             c_from.send(CoordChanEvent::NCErr(sid));
                         } else {
@@ -205,6 +208,13 @@ impl CoordInner {
                             c_to.send(CoordChanEvent::NCRes(sid, addr, cert));
                         } else {
                             tracing::warn!("NCRes client disappeared: {}:{}", to, sid);
+                        }
+                    }
+                    NewChannelErr(to, sid) => {
+                        if let Some(c_to) = self.clients.get(&to) {
+                            c_to.send(CoordChanEvent::NCErr(sid));
+                        } else {
+                            tracing::warn!("NCErr client disappeared: {}:{}", to, sid);
                         }
                     }
                 },

@@ -48,7 +48,7 @@
     - [x] direct Client <-> Coord streams
     - [x] Client keepalive
     - [ ] direct Client <-> Client channels
-    - [ ] automagically pick client-to-client vs proxied streams
+    - [ ] automagically pick client-to-client vs proxied streams?
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
     - [ ] NAT ~detection~ traversal

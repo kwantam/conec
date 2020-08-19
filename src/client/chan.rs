@@ -7,7 +7,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::StreamPeer;
+use super::{ichan::IncomingChannelsEvent, StreamPeer};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
     ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
@@ -16,7 +16,10 @@ use crate::types::{
 use crate::util;
 
 use err_derive::Error;
-use futures::{channel::oneshot, prelude::*};
+use futures::{
+    channel::{mpsc, oneshot},
+    prelude::*,
+};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
@@ -76,8 +79,7 @@ impl Future for ConnectingChannel {
 pub(super) struct ClientChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
-    incs_bye_out: Option<oneshot::Sender<()>>,
-    incs_bye_in: oneshot::Receiver<()>,
+    bye: mpsc::UnboundedSender<()>,
     ref_count: usize,
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
@@ -85,6 +87,7 @@ pub(super) struct ClientChanInner {
     new_channels: HashMap<u32, Option<ConnectingChannelHandle>>,
     flushing: bool,
     keepalive: Option<Interval>,
+    cert_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
 }
 
 impl ClientChanInner {
@@ -140,11 +143,11 @@ impl ClientChanInner {
                 Ok(())
             }
         }?;
-        match self.incs_bye_in.poll_unpin(cx) {
-            Poll::Pending => Ok(()),
-            _ => Err(ClientChanError::OtherDriverHup),
-        }?;
-        Ok(())
+
+        match self.bye.poll_ready_unpin(cx) {
+            Poll::Ready(Err(_)) => Err(ClientChanError::OtherDriverHup),
+            _ => Ok(()),
+        }
     }
 
     fn get_new_str_or_ch<T>(
@@ -193,6 +196,18 @@ impl ClientChanInner {
                     chan.send(Err(OutStreamError::Coord)).ok();
                     Ok(())
                 }
+                ControlMsg::CertReq(peer, sid, cert) => {
+                    if let Some(ref sender) = self.cert_sender {
+                        self.to_send
+                            .push_back(ControlMsg::CertOk(peer.clone(), sid));
+                        sender
+                            .unbounded_send(IncomingChannelsEvent::Certificate(peer, cert))
+                            .or(Err(ClientChanError::OtherDriverHup))
+                    } else {
+                        self.to_send.push_back(ControlMsg::CertNok(peer, sid));
+                        Ok(())
+                    }
+                }
                 ControlMsg::KeepAlive => Ok(()),
                 _ => {
                     let err = ClientChanError::WrongMessage(msg);
@@ -237,26 +252,22 @@ impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
-    ) -> (Self, oneshot::Sender<()>, oneshot::Receiver<()>) {
-        let (i_client, incs_bye_in) = oneshot::channel();
-        let (incs_bye_out, i_bye) = oneshot::channel();
-        (
-            Self(Arc::new(Mutex::new(ClientChanInner {
-                conn,
-                ctrl,
-                incs_bye_out: Some(incs_bye_out),
-                incs_bye_in,
-                ref_count: 0,
-                driver: None,
-                to_send: VecDeque::new(),
-                new_streams: HashMap::new(),
-                new_channels: HashMap::new(),
-                flushing: false,
-                keepalive: None,
-            }))),
-            i_client,
-            i_bye,
-        )
+        bye: mpsc::UnboundedSender<()>,
+        cert_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+    ) -> Self {
+        Self(Arc::new(Mutex::new(ClientChanInner {
+            conn,
+            ctrl,
+            bye,
+            ref_count: 0,
+            driver: None,
+            to_send: VecDeque::new(),
+            new_streams: HashMap::new(),
+            new_channels: HashMap::new(),
+            flushing: false,
+            keepalive: None,
+            cert_sender,
+        })))
     }
 }
 
@@ -277,7 +288,7 @@ impl Drop for ClientChanDriver {
     fn drop(&mut self) {
         let inner = &mut *self.0.lock().unwrap();
         // tell the incoming stream driver that we died
-        inner.incs_bye_out.take().unwrap().send(()).ok();
+        inner.bye.unbounded_send(()).ok();
         inner.keepalive.take();
     }
 }
