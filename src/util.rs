@@ -61,7 +61,7 @@ pub(crate) fn drive_ctrl_send(
     Ok(cont)
 }
 
-///! Errors when constructing a new coordinator configuration
+///! Errors when reading in a certificate
 #[derive(Debug, Error)]
 pub enum CertReadError {
     ///! Failed to read certificate or key file

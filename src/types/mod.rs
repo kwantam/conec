@@ -12,7 +12,6 @@
 mod conn;
 mod ctrlstream;
 
-use crate::coord::CoordChanError;
 pub(crate) use conn::ConecConn;
 pub use conn::ConecConnError;
 pub(crate) use ctrlstream::CtrlStream;
@@ -26,6 +25,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 ///! Receiving end of a data stream: a [Stream](futures::stream::Stream) of [BytesMut](bytes::BytesMut).
@@ -33,6 +33,21 @@ pub type InStream = FramedRead<RecvStream, LengthDelimitedCodec>;
 
 ///! Sending end of a data stream that accepts [Bytes](bytes::Bytes).
 pub type OutStream = FramedWrite<SendStream, LengthDelimitedCodec>;
+
+pub(crate) async fn outstream_init(
+    send: SendStream,
+    peer: Option<String>,
+    sid: u32,
+) -> Result<OutStream, OutStreamError> {
+    let mut write_stream = SymmetricallyFramed::new(
+        FramedWrite::new(send, LengthDelimitedCodec::new()),
+        SymmetricalBincode::<(Option<String>, u32)>::default(),
+    );
+    // send (from, sid) and flush
+    write_stream.send((peer, sid)).await?;
+    write_stream.flush().await?;
+    Ok(write_stream.into_inner())
+}
 
 #[derive(Clone, Debug)]
 pub(crate) enum ConecConnAddr {
@@ -95,7 +110,7 @@ pub enum OutStreamError {
     NoSuchPeer(String),
     ///! Failed to initialize stream
     #[error(display = "Stream initialization: {:?}", _0)]
-    InitStream(#[source] CoordChanError),
+    InitStream(#[source] io::Error),
 }
 
 pub(crate) type ConnectingOutStreamHandle =

@@ -9,19 +9,23 @@
 
 use super::istream::{IncomingStreamsInner, NewInStream};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
-use crate::types::{ConecConn, ControlMsg, CtrlStream};
+use crate::types::{
+    outstream_init, ConecConn, ConnectingOutStream, ControlMsg,
+    CtrlStream, OutStreamError,
+};
 use crate::util;
 
 use err_derive::Error;
-use futures::channel::mpsc;
+use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use quinn::{ConnectionError, IncomingBiStreams};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio::time::{interval, Duration, Interval};
+use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 
 ///! Client-client channel driver errors
 #[derive(Debug, Error)]
@@ -35,9 +39,6 @@ pub enum ClientClientChanError {
     ///! Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
-    ///! Specified stream id was not unique
-    #[error(display = "New stream sid must be unique")]
-    StreamNameInUse,
     ///! Coordinator sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
@@ -67,6 +68,7 @@ pub(super) struct ClientClientChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
     ibi: IncomingBiStreams,
+    id: String,
     sender: mpsc::UnboundedSender<NewInStream>,
     //bye_out: Option<oneshot::Sender<()>>,
     //bye_in: oneshot::Receiver<()>,
@@ -75,6 +77,7 @@ pub(super) struct ClientClientChanInner {
     to_send: VecDeque<ControlMsg>,
     flushing: bool,
     keepalive: Option<Interval>,
+    sids: HashSet<u32>,
 }
 
 impl ClientClientChanInner {
@@ -170,18 +173,21 @@ impl ClientClientChanRef {
         conn: ConecConn,
         ctrl: CtrlStream,
         ibi: IncomingBiStreams,
+        id: String,
         sender: mpsc::UnboundedSender<NewInStream>,
     ) -> Self {
         Self(Arc::new(Mutex::new(ClientClientChanInner {
             conn,
             ctrl,
             ibi,
+            id,
             sender,
             ref_count: 0,
             driver: None,
             to_send: VecDeque::new(),
             flushing: false,
             keepalive: None,
+            sids: HashSet::new(),
         })))
     }
 }
@@ -196,5 +202,45 @@ impl ClientClientChanDriver {
                 .replace(interval(Duration::new(6, 666666666)));
         }
         Self(inner)
+    }
+}
+
+pub(super) struct CClientClientChan(pub(super) ClientClientChanRef);
+
+impl CClientClientChan {
+    // XXX sid should also be unique w.r.t. proxied streams!!!
+    //     maybe: push uniqueness check up into Client?
+    pub(super) fn new_stream(&self, sid: u32) -> ConnectingOutStream {
+        let (sender, receiver) = oneshot::channel();
+        let inner = &mut *self.0.lock().unwrap();
+
+        // make sure this stream hasn't already been used
+        if inner.sids.contains(&sid) {
+            sender.send(Err(OutStreamError::StreamId)).ok();
+        } else {
+            inner.sids.insert(sid);
+            let bi = inner.conn.open_bi();
+            let id = inner.id.clone();
+            tokio::spawn(async move {
+                let (send, recv) = match bi
+                    .err_into::<OutStreamError>()
+                    .and_then(|(send, recv)| async move {
+                        outstream_init(send, Some(id), sid)
+                            .await
+                            .map(|send| (send, FramedRead::new(recv, LengthDelimitedCodec::new())))
+                    })
+                    .await
+                {
+                    Err(e) => {
+                        sender.send(Err(e)).ok();
+                        return;
+                    }
+                    Ok(send_recv) => send_recv,
+                };
+                sender.send(Ok((send, recv))).ok();
+            });
+        }
+
+        ConnectingOutStream(receiver)
     }
 }

@@ -10,8 +10,8 @@
 use super::CoordEvent;
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream, OutStream,
-    OutStreamError, StreamTo,
+    outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream,
+    OutStream, OutStreamError, StreamTo,
 };
 use crate::util;
 
@@ -57,9 +57,6 @@ pub enum CoordChanError {
     ///! Error while opening new transport stream
     #[error(display = "Opening Bi stream: {:?}", _0)]
     OpenBiStream(#[error(no_from, source)] ConnectionError),
-    ///! Error initializing BiDi stream
-    #[error(display = "Initializing Bi stream: {:?}", _0)]
-    InitStream(#[source] io::Error),
 }
 
 pub(super) struct CoordChanInner {
@@ -92,21 +89,6 @@ pub(super) enum CoordChanEvent {
 }
 
 impl CoordChanInner {
-    async fn stream_init(
-        send: SendStream,
-        peer: Option<String>,
-        sid: u32,
-    ) -> Result<OutStream, CoordChanError> {
-        let mut write_stream = SymmetricallyFramed::new(
-            FramedWrite::new(send, LengthDelimitedCodec::new()),
-            SymmetricalBincode::<(Option<String>, u32)>::default(),
-        );
-        // send (from, sid) and flush
-        write_stream.send((peer, sid)).await?;
-        write_stream.flush().await?;
-        Ok(write_stream.into_inner())
-    }
-
     // read the next message from the recv channel
     fn drive_ctrl_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         let mut recvd = 0;
@@ -195,10 +177,13 @@ impl CoordChanInner {
                             if let Some((send, recv)) = self.new_streams.remove(&sid) {
                                 let from = self.peer.clone();
                                 tokio::spawn(async move {
-                                    let send = match Self::stream_init(send, Some(from), sid).await
-                                    {
+                                    let send = match outstream_init(send, Some(from), sid).await {
                                         Ok(send) => send,
-                                        Err(_) => {
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "CoordChan::handle_events: BiIn: {:?}",
+                                                e
+                                            );
                                             return;
                                         }
                                     };
@@ -231,18 +216,12 @@ impl CoordChanInner {
                                 let (send, recv) = match bi
                                     .err_into::<OutStreamError>()
                                     .and_then(|(send, recv)| async move {
-                                        Self::stream_init(send, None, sid)
-                                            .err_into::<OutStreamError>()
-                                            .await
-                                            .map(|send| {
-                                                (
-                                                    send,
-                                                    FramedRead::new(
-                                                        recv,
-                                                        LengthDelimitedCodec::new(),
-                                                    ),
-                                                )
-                                            })
+                                        outstream_init(send, None, sid).await.map(|send| {
+                                            (
+                                                send,
+                                                FramedRead::new(recv, LengthDelimitedCodec::new()),
+                                            )
+                                        })
                                     })
                                     .await
                                 {

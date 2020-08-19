@@ -39,9 +39,6 @@ pub enum ClientChanError {
     ///! Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
-    ///! Specified stream id was not unique
-    #[error(display = "New stream sid must be unique")]
-    StreamNameInUse,
     ///! Coordinator sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
