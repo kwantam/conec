@@ -13,6 +13,7 @@ This module defines the Client entity and associated functionality.
 See [library documentation](../index.html) for more info on how to instantiate a Client.
 */
 
+mod cchan;
 pub(crate) mod chan;
 pub(crate) mod config;
 mod ichan;
@@ -22,6 +23,7 @@ mod tls;
 use crate::consts::ALPN_CONEC;
 use crate::types::{ConecConn, ConecConnError, ConnectingOutStream};
 use crate::Coord;
+use cchan::ClientClientChan;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
