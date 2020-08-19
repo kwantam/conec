@@ -115,9 +115,14 @@ impl IncomingStreamsInner {
         Ok(false)
     }
 
-    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
-        self.handle_events(cx)?;
-        self.drive_streams_recv(cx)
+    fn run_driver(&mut self, cx: &mut Context) -> Result<(), IncomingStreamsError> {
+        loop {
+            self.handle_events(cx)?;
+            let keep_going = self.drive_streams_recv(cx)?;
+            if !keep_going {
+                return Ok(());
+            }
+        }
     }
 }
 

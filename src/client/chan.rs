@@ -220,14 +220,18 @@ impl ClientChanInner {
             .map_err(ClientChanError::Sink)
     }
 
-    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
-        let mut keep_going = false;
-        self.handle_events(cx)?;
-        keep_going |= self.drive_ctrl_recv(cx)?;
-        if !self.to_send.is_empty() || self.flushing {
-            keep_going |= self.drive_ctrl_send(cx)?;
+    fn run_driver(&mut self, cx: &mut Context) -> Result<(), ClientChanError> {
+        loop {
+            let mut keep_going = false;
+            self.handle_events(cx)?;
+            keep_going |= self.drive_ctrl_recv(cx)?;
+            if !self.to_send.is_empty() || self.flushing {
+                keep_going |= self.drive_ctrl_send(cx)?;
+            }
+            if !keep_going {
+                return Ok(());
+            }
         }
-        Ok(keep_going)
     }
 }
 

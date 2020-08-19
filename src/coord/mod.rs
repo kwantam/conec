@@ -219,11 +219,15 @@ impl CoordInner {
         false
     }
 
-    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, CoordError> {
-        let mut keep_going = false;
-        keep_going |= self.drive_accept(cx)?;
-        keep_going |= self.handle_events(cx);
-        Ok(keep_going)
+    fn run_driver(&mut self, cx: &mut Context) -> Result<(), CoordError> {
+        loop {
+            let mut keep_going = false;
+            keep_going |= self.drive_accept(cx)?;
+            keep_going |= self.handle_events(cx);
+            if !keep_going {
+                return Ok(());
+            }
+        }
     }
 }
 

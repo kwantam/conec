@@ -162,11 +162,7 @@ macro_rules! def_driver {
                     Some(w) if w.will_wake(cx.waker()) => (),
                     _ => inner.driver = Some(cx.waker().clone()),
                 };
-                loop {
-                    if !inner.run_driver(cx)? {
-                        break;
-                    }
-                }
+                inner.run_driver(cx)?;
                 if inner.ref_count == 0 {
                     Poll::Ready(Ok(()))
                 } else {

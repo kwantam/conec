@@ -157,11 +157,15 @@ impl IncomingChannelsInner {
         Ok(false)
     }
 
-    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, IncomingChannelsError> {
-        let mut keep_going = false;
-        keep_going |= self.drive_accept(cx)?;
-        keep_going |= self.handle_events(cx)?;
-        Ok(keep_going)
+    fn run_driver(&mut self, cx: &mut Context) -> Result<(), IncomingChannelsError> {
+        loop {
+            let mut keep_going = false;
+            keep_going |= self.drive_accept(cx)?;
+            keep_going |= self.handle_events(cx)?;
+            if !keep_going {
+                return Ok(());
+            }
+        }
     }
 }
 

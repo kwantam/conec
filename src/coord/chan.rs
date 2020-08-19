@@ -309,15 +309,19 @@ impl CoordChanInner {
         Ok(false)
     }
 
-    fn run_driver(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
-        let mut keep_going = false;
-        keep_going |= self.drive_ctrl_recv(cx)?;
-        keep_going |= self.handle_events(cx);
-        if !self.to_send.is_empty() || self.flushing {
-            keep_going |= self.drive_ctrl_send(cx)?;
+    fn run_driver(&mut self, cx: &mut Context) -> Result<(), CoordChanError> {
+        loop {
+            let mut keep_going = false;
+            keep_going |= self.drive_ctrl_recv(cx)?;
+            keep_going |= self.handle_events(cx);
+            if !self.to_send.is_empty() || self.flushing {
+                keep_going |= self.drive_ctrl_send(cx)?;
+            }
+            keep_going |= self.drive_ibi_recv(cx)?;
+            if !keep_going {
+                return Ok(());
+            }
         }
-        keep_going |= self.drive_ibi_recv(cx)?;
-        Ok(keep_going)
     }
 }
 
