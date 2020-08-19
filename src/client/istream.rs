@@ -33,9 +33,6 @@ pub enum IncomingStreamsError {
     ///! Transport unexpectedly stopped delivering new streams
     #[error(display = "Unexpected end of Bi stream")]
     EndOfBiStream,
-    ///! Client's connection to Coordinator disappeared
-    #[error(display = "Client is gone")]
-    ClientClosed,
     ///! Incoming streams receiver disappeared
     #[error(display = "IncomingStreams receiver is gone")]
     ReceiverClosed,
@@ -49,7 +46,6 @@ pub(super) struct IncomingStreamsInner {
     ref_count: usize,
     driver: Option<Waker>,
     sender: mpsc::UnboundedSender<NewInStream>,
-    bye: mpsc::UnboundedSender<()>,
 }
 
 impl IncomingStreamsInner {
@@ -88,11 +84,6 @@ impl IncomingStreamsInner {
         match self.sender.poll_ready(cx) {
             Poll::Ready(Err(_)) => Err(IncomingStreamsError::ReceiverClosed),
             _ => Ok(()),
-        }?;
-
-        match self.bye.poll_ready_unpin(cx) {
-            Poll::Ready(Err(_)) => Err(IncomingStreamsError::ClientClosed),
-            _ => Ok(()),
         }
     }
 
@@ -126,17 +117,12 @@ impl IncomingStreamsInner {
 
 def_ref!(IncomingStreamsInner, IncomingStreamsRef);
 impl IncomingStreamsRef {
-    pub(super) fn new(
-        ibi: IncomingBiStreams,
-        sender: mpsc::UnboundedSender<NewInStream>,
-        bye: mpsc::UnboundedSender<()>,
-    ) -> Self {
+    pub(super) fn new(ibi: IncomingBiStreams, sender: mpsc::UnboundedSender<NewInStream>) -> Self {
         Self(Arc::new(Mutex::new(IncomingStreamsInner {
             ibi,
             ref_count: 0,
             driver: None,
             sender,
-            bye,
         })))
     }
 }
@@ -146,10 +132,3 @@ def_driver!(
     IncomingStreamsDriver,
     IncomingStreamsError
 );
-impl Drop for IncomingStreamsDriver {
-    fn drop(&mut self) {
-        let inner = self.0.lock().unwrap();
-        // tell the coord chan eriver that we died
-        inner.bye.unbounded_send(()).ok();
-    }
-}

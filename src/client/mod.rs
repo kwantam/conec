@@ -23,7 +23,6 @@ mod tls;
 use crate::consts::ALPN_CONEC;
 use crate::types::{ConecConn, ConecConnError, ConnectingOutStream};
 use crate::Coord;
-use cchan::ClientClientChan;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
@@ -114,8 +113,6 @@ pub struct Client {
     #[allow(dead_code)]
     coord: ClientChan,
     ctr: u32,
-    bye: mpsc::UnboundedReceiver<()>,
-    chan_in: mpsc::UnboundedReceiver<ClientClientChan>,
 }
 
 impl Client {
@@ -169,18 +166,15 @@ impl Client {
             .await
             .map_err(ClientError::Control)?;
 
-        let (bye_sender, bye) = mpsc::unbounded();
-        let (stream_sender, istrms) = mpsc::unbounded();
-        let (chan_out, chan_in) = mpsc::unbounded();
+        // IPC
+        let (stream_sender, incoming_streams) = mpsc::unbounded();
 
         // incoming channels listener
         let (in_channels, cert_sender) = if config.listen {
             let (in_channels, cert_sender) = IncomingChannelsRef::new(
                 config.id,
                 config.keepalive,
-                bye_sender.clone(),
                 incoming,
-                chan_out,
                 stream_sender.clone(),
             );
             let driver = IncomingChannelsDriver(in_channels.clone());
@@ -191,13 +185,13 @@ impl Client {
         };
 
         // client-coordinator channel
-        let coord = ClientChanRef::new(conn, ctrl, bye_sender.clone(), cert_sender);
+        let coord = ClientChanRef::new(conn, ctrl, cert_sender);
         let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
         tokio::spawn(async move { driver.await });
         let coord = ClientChan(coord);
 
         // set up the incoming streams listener
-        let in_streams = IncomingStreamsRef::new(ibi, stream_sender, bye_sender);
+        let in_streams = IncomingStreamsRef::new(ibi, stream_sender);
         let driver = IncomingStreamsDriver(in_streams.clone());
         tokio::spawn(async move { driver.await });
 
@@ -210,10 +204,8 @@ impl Client {
                 in_channels,
                 coord,
                 ctr: 1u32 << 31,
-                bye,
-                chan_in,
             },
-            istrms,
+            incoming_streams,
         ))
     }
 
@@ -245,10 +237,5 @@ impl Client {
     /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
     pub fn new_channel_with_id(&self, to: String, cid: u32) -> ConnectingChannel {
         self.coord.new_channel(to, cid)
-    }
-
-    ///! Return the local address that Client is bound to
-    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
-        self.endpoint.local_addr()
     }
 }

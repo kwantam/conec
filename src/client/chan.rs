@@ -79,7 +79,6 @@ impl Future for ConnectingChannel {
 pub(super) struct ClientChanInner {
     conn: ConecConn,
     ctrl: CtrlStream,
-    bye: mpsc::UnboundedSender<()>,
     ref_count: usize,
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
@@ -142,11 +141,6 @@ impl ClientChanInner {
                 self.to_send.push_back(ControlMsg::KeepAlive);
                 Ok(())
             }
-        }?;
-
-        match self.bye.poll_ready_unpin(cx) {
-            Poll::Ready(Err(_)) => Err(ClientChanError::OtherDriverHup),
-            _ => Ok(()),
         }
     }
 
@@ -252,13 +246,11 @@ impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
-        bye: mpsc::UnboundedSender<()>,
         cert_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
     ) -> Self {
         Self(Arc::new(Mutex::new(ClientChanInner {
             conn,
             ctrl,
-            bye,
             ref_count: 0,
             driver: None,
             to_send: VecDeque::new(),
@@ -287,8 +279,6 @@ impl ClientChanDriver {
 impl Drop for ClientChanDriver {
     fn drop(&mut self) {
         let inner = &mut *self.0.lock().unwrap();
-        // tell the incoming stream driver that we died
-        inner.bye.unbounded_send(()).ok();
         inner.keepalive.take();
     }
 }

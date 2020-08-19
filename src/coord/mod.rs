@@ -342,7 +342,7 @@ impl Coord {
     }
 
     ///! Return the local address that Coord is bound to
-    pub fn local_addr(&self) -> std::net::SocketAddr {
+    pub(crate) fn local_addr(&self) -> std::net::SocketAddr {
         // unwrap is safe because Coord always has a bound socket
         self.endpoint.local_addr().unwrap()
     }

@@ -44,17 +44,17 @@ pub enum IncomingChannelsError {
 pub(super) enum IncomingChannelsEvent {
     Certificate(String, Vec<u8>),
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
+    ChanClose(String),
 }
 
 pub(super) struct IncomingChannelsInner {
     id: String,
     keepalive: bool,
-    bye: mpsc::UnboundedSender<()>,
     channels: Incoming,
     ref_count: usize,
     driver: Option<Waker>,
     certs: HashMap<String, Vec<u8>>,
-    chan_out: mpsc::UnboundedSender<ClientClientChan>,
+    chans: HashMap<String, ClientClientChan>,
     strm_out: mpsc::UnboundedSender<NewInStream>,
     sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
     events: mpsc::UnboundedReceiver<IncomingChannelsEvent>,
@@ -100,60 +100,51 @@ impl IncomingChannelsInner {
 
     fn handle_events(&mut self, cx: &mut Context) -> Result<bool, IncomingChannelsError> {
         use IncomingChannelsEvent::*;
-
-        match self.chan_out.poll_ready(cx) {
-            Poll::Ready(Err(_)) => Err(IncomingChannelsError::ReceiverClosed),
-            _ => Ok(()),
-        }?;
-
-        match self.bye.poll_ready_unpin(cx) {
-            Poll::Ready(Err(_)) => Err(IncomingChannelsError::ClientClosed),
-            _ => Ok(()),
-        }?;
-
         let mut recvd = 0;
         loop {
-            match self.events.poll_next_unpin(cx) {
+            let event = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => unreachable!("we own a sender"),
-                Poll::Ready(Some(event)) => match event {
-                    Certificate(peer, cert) => {
-                        self.certs.insert(peer, cert);
-                    }
-                    Accepted(conn, ctrl, ibi, peer) => {
-                        // check that cert client gave us is consistent with what Coord told us
-                        match self.certs.get(&peer) {
-                            Some(cert) if &cert[..] == conn.get_cert_bytes() => {
-                                let inner = ClientClientChanRef::new(
-                                    conn,
-                                    ctrl,
-                                    ibi,
-                                    self.id.clone(),
-                                    self.strm_out.clone(),
-                                );
-                                let driver =
-                                    ClientClientChanDriver::new(inner.clone(), self.keepalive);
-                                tokio::spawn(async move { driver.await });
-                                // build and send ClientClientChan
-                                self.chan_out.unbounded_send(ClientClientChan(inner)).ok();
-                            }
-                            _ => {
-                                tokio::spawn(async move {
-                                    let mut ctrl = ctrl;
-                                    ctrl.send(ControlMsg::HelloError(
-                                        "certificate mismatch".to_string(),
-                                    ))
+                Poll::Ready(Some(event)) => event,
+            };
+            match event {
+                Certificate(peer, cert) => {
+                    self.certs.insert(peer, cert);
+                }
+                Accepted(conn, ctrl, ibi, peer) => {
+                    // check that cert client gave us is consistent with what Coord told us
+                    match self.certs.get(&peer) {
+                        Some(cert) if &cert[..] == conn.get_cert_bytes() => {
+                            let inner = ClientClientChanRef::new(
+                                conn,
+                                ctrl,
+                                ibi,
+                                self.id.clone(),
+                                peer.clone(),
+                                self.strm_out.clone(),
+                                self.sender.clone(),
+                            );
+                            let driver = ClientClientChanDriver::new(inner.clone(), self.keepalive);
+                            tokio::spawn(async move { driver.await });
+                            self.chans.insert(peer, ClientClientChan(inner));
+                        }
+                        _ => {
+                            tokio::spawn(async move {
+                                let mut ctrl = ctrl;
+                                ctrl.send(ControlMsg::HelloError("cert mismatch".to_string()))
                                     .await
                                     .ok();
-                                    ctrl.finish().await.ok();
-                                    drop(ctrl);
-                                    drop(conn);
-                                });
-                            }
+                                ctrl.finish().await.ok();
+                                drop(ctrl);
+                                drop(conn);
+                            });
                         }
                     }
-                },
-            }
+                }
+                ChanClose(peer) => {
+                    self.chans.remove(&peer);
+                }
+            };
             recvd += 1;
             if recvd >= MAX_LOOPS {
                 return Ok(true);
@@ -179,9 +170,7 @@ impl IncomingChannelsRef {
     pub(super) fn new(
         id: String,
         keepalive: bool,
-        bye: mpsc::UnboundedSender<()>,
         channels: Incoming,
-        chan_out: mpsc::UnboundedSender<ClientClientChan>,
         strm_out: mpsc::UnboundedSender<NewInStream>,
     ) -> (Self, mpsc::UnboundedSender<IncomingChannelsEvent>) {
         let (sender, events) = mpsc::unbounded();
@@ -189,12 +178,11 @@ impl IncomingChannelsRef {
             Self(Arc::new(Mutex::new(IncomingChannelsInner {
                 id,
                 keepalive,
-                bye,
                 channels,
                 ref_count: 0,
                 driver: None,
                 certs: HashMap::new(),
-                chan_out,
+                chans: HashMap::new(),
                 strm_out,
                 sender: sender.clone(),
                 events,
@@ -209,10 +197,3 @@ def_driver!(
     IncomingChannelsDriver,
     IncomingChannelsError
 );
-impl Drop for IncomingChannelsDriver {
-    fn drop(&mut self) {
-        let inner = self.0.lock().unwrap();
-        // tell client we died
-        inner.bye.unbounded_send(()).ok();
-    }
-}

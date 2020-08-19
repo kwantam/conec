@@ -7,6 +7,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use super::ichan::IncomingChannelsEvent;
 use super::istream::{IncomingStreamsInner, NewInStream};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
@@ -62,9 +63,9 @@ pub(super) struct ClientClientChanInner {
     ctrl: CtrlStream,
     ibi: IncomingBiStreams,
     id: String,
+    peer: String,
     sender: mpsc::UnboundedSender<NewInStream>,
-    //bye_out: Option<oneshot::Sender<()>>,
-    //bye_in: oneshot::Receiver<()>,
+    ichan: mpsc::UnboundedSender<IncomingChannelsEvent>,
     ref_count: usize,
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
@@ -167,14 +168,18 @@ impl ClientClientChanRef {
         ctrl: CtrlStream,
         ibi: IncomingBiStreams,
         id: String,
+        peer: String,
         sender: mpsc::UnboundedSender<NewInStream>,
+        ichan: mpsc::UnboundedSender<IncomingChannelsEvent>,
     ) -> Self {
         Self(Arc::new(Mutex::new(ClientClientChanInner {
             conn,
             ctrl,
             ibi,
             id,
+            peer,
             sender,
+            ichan,
             ref_count: 0,
             driver: None,
             to_send: VecDeque::new(),
@@ -195,6 +200,17 @@ impl ClientClientChanDriver {
                 .replace(interval(Duration::new(6, 666666666)));
         }
         Self(inner)
+    }
+}
+
+impl Drop for ClientClientChanDriver {
+    fn drop(&mut self) {
+        let mut inner = self.0.lock().unwrap();
+        inner.keepalive.take();
+        inner
+            .ichan
+            .unbounded_send(IncomingChannelsEvent::ChanClose(inner.peer.clone()))
+            .ok();
     }
 }
 

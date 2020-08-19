@@ -48,6 +48,11 @@
     - [x] direct Client <-> Coord streams
     - [x] Client keepalive
     - [ ] direct Client <-> Client channels
+        - [x] incoming channels listener
+        - [x] client-to-client channels impl
+        - [x] hold channels in ichan
+        - [ ] send ichan events to open new channel, new stream
+        - [ ] who owns Endpoint? Clone in ichan? Option<> in Client?
     - [ ] automagically pick client-to-client vs proxied streams?
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
