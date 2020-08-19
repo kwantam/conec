@@ -188,7 +188,11 @@ impl IncomingChannelsRef {
     }
 }
 
-def_driver!(IncomingChannelsRef, IncomingChannelsDriver, IncomingChannelsError);
+def_driver!(
+    IncomingChannelsRef,
+    IncomingChannelsDriver,
+    IncomingChannelsError
+);
 impl Drop for IncomingChannelsDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();

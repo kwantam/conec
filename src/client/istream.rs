@@ -13,7 +13,7 @@ use crate::types::{InStream, OutStream};
 use err_derive::Error;
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
-use quinn::{ConnectionError, IncomingBiStreams};
+use quinn::{ConnectionError, IncomingBiStreams, RecvStream, SendStream};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -55,7 +55,38 @@ pub(super) struct IncomingStreamsInner {
 }
 
 impl IncomingStreamsInner {
-    fn drive_streams_recv(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
+    pub(super) fn stream_init(
+        send: SendStream,
+        recv: RecvStream,
+        sender: mpsc::UnboundedSender<NewInStream>,
+    ) {
+        tokio::spawn(async move {
+            let mut read_stream = SymmetricallyFramed::new(
+                FramedRead::new(recv, LengthDelimitedCodec::new()),
+                SymmetricalBincode::<(Option<String>, u32)>::default(),
+            );
+            let (peer, chanid) = match read_stream.try_next().await {
+                Err(e) => {
+                    tracing::warn!("drive_streams_recv: {:?}", e);
+                    return;
+                }
+                Ok(msg) => match msg {
+                    Some(peer_chanid) => peer_chanid,
+                    None => {
+                        tracing::warn!("drive_streams_recv: unexpected end of stream");
+                        return;
+                    }
+                },
+            };
+            let instream = read_stream.into_inner();
+            let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
+            sender
+                .unbounded_send((peer, chanid, outstream, instream))
+                .ok();
+        });
+    }
+
+    fn handle_events(&mut self, cx: &mut Context) -> Result<(), IncomingStreamsError> {
         match self.sender.poll_ready(cx) {
             Poll::Ready(Err(_)) => Err(IncomingStreamsError::ReceiverClosed),
             _ => Ok(()),
@@ -64,8 +95,10 @@ impl IncomingStreamsInner {
         match self.chan_bye_in.poll_unpin(cx) {
             Poll::Pending => Ok(()),
             _ => Err(IncomingStreamsError::ClientClosed),
-        }?;
+        }
+    }
 
+    fn drive_streams_recv(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
         let mut recvd = 0;
         loop {
             let (send, recv) = match self.streams.poll_next_unpin(cx) {
@@ -73,31 +106,7 @@ impl IncomingStreamsInner {
                 Poll::Ready(None) => Err(IncomingStreamsError::EndOfBiStream),
                 Poll::Ready(Some(r)) => r.map_err(IncomingStreamsError::AcceptBiStream),
             }?;
-            let sender = self.sender.clone();
-            tokio::spawn(async move {
-                let mut read_stream = SymmetricallyFramed::new(
-                    FramedRead::new(recv, LengthDelimitedCodec::new()),
-                    SymmetricalBincode::<(Option<String>, u32)>::default(),
-                );
-                let (peer, chanid) = match read_stream.try_next().await {
-                    Err(e) => {
-                        tracing::warn!("drive_streams_recv: {:?}", e);
-                        return;
-                    }
-                    Ok(msg) => match msg {
-                        Some(peer_chanid) => peer_chanid,
-                        None => {
-                            tracing::warn!("drive_streams_recv: unexpected end of stream");
-                            return;
-                        }
-                    },
-                };
-                let instream = read_stream.into_inner();
-                let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
-                sender
-                    .unbounded_send((peer, chanid, outstream, instream))
-                    .ok();
-            });
+            Self::stream_init(send, recv, self.sender.clone());
             recvd += 1;
             if recvd >= MAX_LOOPS {
                 return Ok(true);
@@ -107,6 +116,7 @@ impl IncomingStreamsInner {
     }
 
     fn run_driver(&mut self, cx: &mut Context) -> Result<bool, IncomingStreamsError> {
+        self.handle_events(cx)?;
         self.drive_streams_recv(cx)
     }
 }
@@ -130,7 +140,11 @@ impl IncomingStreamsRef {
     }
 }
 
-def_driver!(IncomingStreamsRef, IncomingStreamsDriver, IncomingStreamsError);
+def_driver!(
+    IncomingStreamsRef,
+    IncomingStreamsDriver,
+    IncomingStreamsError
+);
 impl Drop for IncomingStreamsDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();
