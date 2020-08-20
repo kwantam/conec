@@ -26,8 +26,8 @@ use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
-pub use ichan::{IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannelsDriver, IncomingChannelsRef};
+pub use ichan::{IncomingChannelsError, NewChannelError};
 pub use istream::{IncomingStreams, NewInStream};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
@@ -159,8 +159,7 @@ impl Client {
         let (mut endpoint, incoming) = endpoint.bind(&config.srcaddr)?;
 
         // set up the network endpoint and connect to the coordinator
-        let (mut conn, ibi) =
-            ConecConn::connect(&mut endpoint, &config.coord, config.addr, None).await?;
+        let (mut conn, ibi) = ConecConn::connect(&mut endpoint, &config.coord, config.addr, None).await?;
 
         // set up the control stream with the coordinator
         let ctrl = conn

@@ -7,9 +7,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use rustls::{
-    Certificate, ClientCertVerified, ClientCertVerifier, DistinguishedNames, ServerConfig, TLSError,
-};
+use rustls::{Certificate, ClientCertVerified, ClientCertVerifier, DistinguishedNames, ServerConfig, TLSError};
 use std::sync::Arc;
 use webpki::{
     trust_anchor_util::cert_der_as_trust_anchor, DNSName, EndEntityCert, TLSClientTrustAnchors,
@@ -50,22 +48,18 @@ impl ClientCertVerifier for ConecClientCertVerifier {
         let cert_der = &presented_certs[0].0;
         let trust_der = self.0.as_ref().unwrap_or(&presented_certs[0].0);
         let cert = EndEntityCert::from(cert_der).map_err(TLSError::WebPKIError)?;
-        let time = webpki::Time::try_from(std::time::SystemTime::now())
-            .map_err(|_| TLSError::FailedToGetCurrentTime)?;
+        let time =
+            webpki::Time::try_from(std::time::SystemTime::now()).map_err(|_| TLSError::FailedToGetCurrentTime)?;
         cert.verify_is_valid_tls_client_cert(
             &[&ECDSA_P256_SHA256],
-            &TLSClientTrustAnchors(&[
-                cert_der_as_trust_anchor(trust_der).map_err(TLSError::WebPKIError)?
-            ]),
+            &TLSClientTrustAnchors(&[cert_der_as_trust_anchor(trust_der).map_err(TLSError::WebPKIError)?]),
             &[],
             time,
         )
         .map_err(TLSError::WebPKIError)?;
         cert.verify_is_valid_tls_server_cert(
             &[&ECDSA_P256_SHA256],
-            &TLSServerTrustAnchors(&[
-                cert_der_as_trust_anchor(trust_der).map_err(TLSError::WebPKIError)?
-            ]),
+            &TLSServerTrustAnchors(&[cert_der_as_trust_anchor(trust_der).map_err(TLSError::WebPKIError)?]),
             &[],
             time,
         )

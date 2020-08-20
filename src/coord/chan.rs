@@ -10,8 +10,8 @@
 use super::CoordEvent;
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream,
-    OutStream, OutStreamError, StreamTo,
+    outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream, OutStream,
+    OutStreamError, StreamTo,
 };
 use crate::util;
 
@@ -156,101 +156,91 @@ impl CoordChanInner {
         use CoordChanEvent::*;
         let mut accepted = 0;
         loop {
-            match self.events.poll_next_unpin(cx) {
-                Poll::Ready(Some(event)) => match event {
-                    NSErr(sid) => self.to_send.push_back(ControlMsg::NewStreamErr(sid)),
-                    NSRes(sid, res) => match res {
-                        Err(_) => {
-                            self.to_send.push_back(ControlMsg::NewStreamErr(sid));
-                        }
-                        Ok(send_recv) => {
-                            self.to_send.push_back(ControlMsg::NewStreamOk(sid));
-                            self.new_streams.insert(sid, send_recv);
-                        }
-                    },
-                    NSReq(to, sid) => {
-                        let coord = self.coord.clone();
-                        let bi = self.conn.open_bi();
-                        tokio::spawn(async move {
-                            coord
-                                .unbounded_send(CoordEvent::NewStreamRes(to, sid, bi.await))
-                                .ok();
-                        });
+            let event = match self.events.poll_next_unpin(cx) {
+                Poll::Pending => break,
+                Poll::Ready(None) => unreachable!("we own a sender"),
+                Poll::Ready(Some(event)) => event,
+            };
+            match event {
+                NSErr(sid) => self.to_send.push_back(ControlMsg::NewStreamErr(sid)),
+                NSRes(sid, res) => match res {
+                    Err(_) => {
+                        self.to_send.push_back(ControlMsg::NewStreamErr(sid));
                     }
-                    NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
-                    NCReq(to, sid, cert) => {
-                        self.to_send.push_back(ControlMsg::CertReq(to, sid, cert))
-                    }
-                    NCRes(sid, addr, cert) => self
-                        .to_send
-                        .push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
-                    BiIn(sid, n_send, n_recv) => match sid {
-                        StreamTo::Client(sid) => {
-                            if let Some((send, recv)) = self.new_streams.remove(&sid) {
-                                let from = self.peer.clone();
-                                tokio::spawn(async move {
-                                    let send = match outstream_init(send, Some(from), sid).await {
-                                        Ok(send) => send,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "CoordChan::handle_events: BiIn: {:?}",
-                                                e
-                                            );
-                                            return;
-                                        }
-                                    };
-                                    let recv = FramedRead::new(recv, LengthDelimitedCodec::new());
-
-                                    // forward all messages in both directions
-                                    let fw1 = n_recv.map(|b| b.map(|bb| bb.freeze())).forward(send);
-                                    let fw2 = recv.map(|b| b.map(|bb| bb.freeze())).forward(n_send);
-                                    let (sf, rf) = futures::future::join(fw1, fw2).await;
-                                    sf.ok();
-                                    rf.ok();
-                                });
-                            } else {
-                                self.to_send.push_back(ControlMsg::NewStreamErr(sid));
-                            }
-                        }
-                        StreamTo::Coord(sid) => {
-                            self.is_sender
-                                .unbounded_send((self.peer.clone(), sid, n_send, n_recv))
-                                .ok();
-                        }
-                    },
-                    BiOut(sid, handle) => {
-                        if self.sids.contains(&sid) {
-                            handle.send(Err(OutStreamError::StreamId)).ok();
-                        } else {
-                            self.sids.insert(sid);
-                            let bi = self.conn.open_bi();
-                            tokio::spawn(async move {
-                                let (send, recv) = match bi
-                                    .err_into::<OutStreamError>()
-                                    .and_then(|(send, recv)| async move {
-                                        outstream_init(send, None, sid).await.map(|send| {
-                                            (
-                                                send,
-                                                FramedRead::new(recv, LengthDelimitedCodec::new()),
-                                            )
-                                        })
-                                    })
-                                    .await
-                                {
-                                    Err(e) => {
-                                        handle.send(Err(e)).ok();
-                                        return;
-                                    }
-                                    Ok(send_recv) => send_recv,
-                                };
-
-                                handle.send(Ok((send, recv))).ok();
-                            });
-                        }
+                    Ok(send_recv) => {
+                        self.to_send.push_back(ControlMsg::NewStreamOk(sid));
+                        self.new_streams.insert(sid, send_recv);
                     }
                 },
-                _ => break,
-            }
+                NSReq(to, sid) => {
+                    let coord = self.coord.clone();
+                    let bi = self.conn.open_bi();
+                    tokio::spawn(async move {
+                        coord.unbounded_send(CoordEvent::NewStreamRes(to, sid, bi.await)).ok();
+                    });
+                }
+                NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
+                NCReq(to, sid, cert) => self.to_send.push_back(ControlMsg::CertReq(to, sid, cert)),
+                NCRes(sid, addr, cert) => self.to_send.push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
+                BiIn(sid, n_send, n_recv) => match sid {
+                    StreamTo::Client(sid) => {
+                        if let Some((send, recv)) = self.new_streams.remove(&sid) {
+                            let from = self.peer.clone();
+                            tokio::spawn(async move {
+                                let send = match outstream_init(send, Some(from), sid).await {
+                                    Ok(send) => send,
+                                    Err(e) => {
+                                        tracing::warn!("CoordChan::handle_events: BiIn: {:?}", e);
+                                        return;
+                                    }
+                                };
+                                let recv = FramedRead::new(recv, LengthDelimitedCodec::new());
+
+                                // forward all messages in both directions
+                                let fw1 = n_recv.map(|b| b.map(|bb| bb.freeze())).forward(send);
+                                let fw2 = recv.map(|b| b.map(|bb| bb.freeze())).forward(n_send);
+                                let (sf, rf) = futures::future::join(fw1, fw2).await;
+                                sf.ok();
+                                rf.ok();
+                            });
+                        } else {
+                            self.to_send.push_back(ControlMsg::NewStreamErr(sid));
+                        }
+                    }
+                    StreamTo::Coord(sid) => {
+                        self.is_sender
+                            .unbounded_send((self.peer.clone(), sid, n_send, n_recv))
+                            .ok();
+                    }
+                },
+                BiOut(sid, handle) => {
+                    if self.sids.contains(&sid) {
+                        handle.send(Err(OutStreamError::StreamId)).ok();
+                    } else {
+                        self.sids.insert(sid);
+                        let bi = self.conn.open_bi();
+                        tokio::spawn(async move {
+                            let (send, recv) = match bi
+                                .err_into::<OutStreamError>()
+                                .and_then(|(send, recv)| async move {
+                                    outstream_init(send, None, sid)
+                                        .await
+                                        .map(|send| (send, FramedRead::new(recv, LengthDelimitedCodec::new())))
+                                })
+                                .await
+                            {
+                                Err(e) => {
+                                    handle.send(Err(e)).ok();
+                                    return;
+                                }
+                                Ok(send_recv) => send_recv,
+                            };
+
+                            handle.send(Ok((send, recv))).ok();
+                        });
+                    }
+                }
+            };
             accepted += 1;
             if accepted >= MAX_LOOPS {
                 return true;
@@ -288,9 +278,7 @@ impl CoordChanInner {
                 };
                 let recv = read_stream.into_inner();
                 let send = FramedWrite::new(send, LengthDelimitedCodec::new());
-                sender
-                    .unbounded_send(CoordChanEvent::BiIn(sid, send, recv))
-                    .ok();
+                sender.unbounded_send(CoordChanEvent::BiIn(sid, send, recv)).ok();
             });
             recvd += 1;
             if recvd >= MAX_LOOPS {

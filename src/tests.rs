@@ -24,11 +24,7 @@ use tokio::{runtime, time};
 #[test]
 fn test_simple() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -58,11 +54,7 @@ fn test_simple() {
 #[test]
 fn test_repeat_name() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -105,11 +97,7 @@ fn test_repeat_name() {
 #[test]
 fn test_stream_uni() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -162,11 +150,7 @@ fn test_stream_uni() {
 #[test]
 fn test_stream_bi() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -221,11 +205,7 @@ fn test_stream_bi() {
 #[test]
 fn test_stream_bi_multi() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -278,11 +258,7 @@ fn test_stream_bi_multi() {
 #[test]
 fn test_stream_loopback() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -329,11 +305,7 @@ fn test_stream_loopback() {
 #[test]
 fn test_stream_client_to_coord() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, mut cinc) = {
@@ -388,11 +360,7 @@ fn test_stream_client_to_coord() {
 #[test]
 fn test_stream_coord_to_client() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (mut coord, _cinc) = {
@@ -447,11 +415,7 @@ fn test_stream_coord_to_client() {
 #[test]
 fn test_channel_loopback() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -483,11 +447,7 @@ fn test_channel_loopback() {
 #[test]
 fn test_channel_simple() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -527,11 +487,7 @@ fn test_channel_simple() {
 #[test]
 fn test_client_cert() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
 
     // generate CA and client certificates
     let cacert = generate_ca().unwrap();
@@ -600,11 +556,7 @@ fn test_client_cert() {
 #[test]
 fn test_reject_client_cert() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
 
     // generate CA and client certificates
     let cacert = generate_ca().unwrap();
@@ -641,11 +593,7 @@ fn test_reject_client_cert() {
 #[ignore]
 fn test_keepalive() {
     let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new()
-        .basic_scheduler()
-        .enable_all()
-        .build()
-        .unwrap();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
         let (coord, _cinc) = {
@@ -674,10 +622,7 @@ fn test_keepalive() {
 
 #[test]
 fn check_version() {
-    assert_eq!(
-        crate::consts::VERSION,
-        &format!("CONEC_V{}", env!("CARGO_PKG_VERSION"))
-    );
+    assert_eq!(crate::consts::VERSION, &format!("CONEC_V{}", env!("CARGO_PKG_VERSION")));
 }
 
 fn get_cert_paths() -> (PathBuf, PathBuf) {
@@ -691,15 +636,9 @@ fn get_cert_paths() -> (PathBuf, PathBuf) {
             let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
             let key = cert.serialize_private_key_der();
             let cert = cert.serialize_der().unwrap();
-            fs::create_dir_all(&path)
-                .context("failed to create cert dir")
-                .unwrap();
-            fs::write(&cert_path, &cert)
-                .context("failed to write cert")
-                .unwrap();
-            fs::write(&key_path, &key)
-                .context("failed to write key")
-                .unwrap();
+            fs::create_dir_all(&path).context("failed to create cert dir").unwrap();
+            fs::write(&cert_path, &cert).context("failed to write cert").unwrap();
+            fs::write(&key_path, &key).context("failed to write key").unwrap();
         }
         Ok(_) => (),
         _ => panic!("could not stat file {:?}", cert_path),

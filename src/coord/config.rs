@@ -93,10 +93,7 @@ impl CoordConfig {
     ///
     /// This is a convenience wrapper around [CoordConfig::set_client_ca].
     /// Both PEM and DER formats are supported.
-    pub fn set_client_ca_from_file(
-        &mut self,
-        cert_path: &Path,
-    ) -> Result<&mut Self, CertReadError> {
+    pub fn set_client_ca_from_file(&mut self, cert_path: &Path) -> Result<&mut Self, CertReadError> {
         Ok(self.set_client_ca(get_cert(cert_path)?))
     }
 }

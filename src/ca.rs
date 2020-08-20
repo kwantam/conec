@@ -18,8 +18,7 @@ use crate::consts::VERSION;
 use err_derive::Error;
 use rand::{thread_rng, Rng};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, RcgenError,
-    SanType,
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, RcgenError, SanType,
 };
 
 ///! Errors during key generation
@@ -58,8 +57,5 @@ pub fn generate_cert(name: String, ca: &Certificate) -> Result<(Vec<u8>, Vec<u8>
     params.subject_alt_names = vec![SanType::DnsName(name)];
 
     let cert = Certificate::from_params(params)?;
-    Ok((
-        cert.serialize_der_with_signer(ca)?,
-        cert.serialize_private_key_der(),
-    ))
+    Ok((cert.serialize_der_with_signer(ca)?, cert.serialize_private_key_der()))
 }

@@ -122,10 +122,7 @@ impl ClientConfig {
     ///
     /// This is a convenience wrapper around [ClientConfig::set_client_ca].
     /// Both PEM and DER formats are supported.
-    pub fn set_client_ca_from_file(
-        &mut self,
-        cert_path: &Path,
-    ) -> Result<&mut Self, CertReadError> {
+    pub fn set_client_ca_from_file(&mut self, cert_path: &Path) -> Result<&mut Self, CertReadError> {
         Ok(self.set_client_ca(get_cert(cert_path)?))
     }
 
@@ -188,12 +185,7 @@ impl ClientConfig {
     /// coordinator is configured to accept certificates signed by a particular CA
     /// (via [CoordConfig::set_client_ca](crate::CoordConfig::set_client_ca)), this certificate must
     /// be signed by that CA.
-    pub fn set_cert(
-        &mut self,
-        cert: CertificateChain,
-        key: PrivateKey,
-        key_der: Vec<u8>,
-    ) -> &mut Self {
+    pub fn set_cert(&mut self, cert: CertificateChain, key: PrivateKey, key_der: Vec<u8>) -> &mut Self {
         self.cert_and_key = Some((cert, key, key_der));
         self
     }
@@ -202,11 +194,7 @@ impl ClientConfig {
     ///
     /// This is a convenience wrapper around [ClientConfig::set_cert].
     /// Both PEM and DER formats are supported.
-    pub fn set_cert_from_file(
-        &mut self,
-        cert_path: &Path,
-        key_path: &Path,
-    ) -> Result<&mut Self, CertReadError> {
+    pub fn set_cert_from_file(&mut self, cert_path: &Path, key_path: &Path) -> Result<&mut Self, CertReadError> {
         let (cert, key, key_der) = get_cert_and_key(cert_path, key_path)?;
         Ok(self.set_cert(cert, key, key_der))
     }

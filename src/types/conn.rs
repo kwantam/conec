@@ -13,8 +13,8 @@ use crate::types::ConecConnAddr;
 use err_derive::Error;
 use futures::prelude::*;
 use quinn::{
-    ClientConfig, ConnectError, Connecting, Connection, ConnectionError, Endpoint,
-    IncomingBiStreams, NewConnection, OpenBi,
+    ClientConfig, ConnectError, Connecting, Connection, ConnectionError, Endpoint, IncomingBiStreams,
+    NewConnection, OpenBi,
 };
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -107,17 +107,10 @@ impl ConecConn {
 
     pub(crate) async fn connect_ctrl(&mut self, id: String) -> Result<CtrlStream, ConecConnError> {
         // open a new control stream to newly connected client
-        let (cc_send, cc_recv) = self
-            .conn
-            .open_bi()
-            .await
-            .map_err(ConecConnError::OpenBidiStream)?;
+        let (cc_send, cc_recv) = self.conn.open_bi().await.map_err(ConecConnError::OpenBidiStream)?;
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
-        ctrl_stream
-            .send_clhello(id)
-            .await
-            .map_err(ConecConnError::SendHello)?;
+        ctrl_stream.send_clhello(id).await.map_err(ConecConnError::SendHello)?;
         Ok(ctrl_stream)
     }
 
@@ -137,10 +130,7 @@ impl ConecConn {
         match ctrl_stream.recv_clhello(&self.cert_bytes[..]).await {
             Ok(peer) => Ok((ctrl_stream, peer)),
             Err(e) => {
-                ctrl_stream
-                    .send(ControlMsg::HelloError(format!("{:?}", e)))
-                    .await
-                    .ok();
+                ctrl_stream.send(ControlMsg::HelloError(format!("{:?}", e))).await.ok();
                 ctrl_stream.finish().await.ok();
                 Err(ConecConnError::RecvHello(e))
             }

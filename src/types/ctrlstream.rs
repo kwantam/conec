@@ -94,9 +94,7 @@ impl CtrlStream {
         use CtrlStreamError::*;
 
         // next, send the hello
-        self.send(ClHello(id, VERSION.to_string()))
-            .await
-            .map_err(SendClHello)?;
+        self.send(ClHello(id, VERSION.to_string())).await.map_err(SendClHello)?;
 
         // finally, get CoHello (or maybe an Error)
         match self.try_next().await.map_err(RecvCoHello)? {
@@ -107,10 +105,7 @@ impl CtrlStream {
         }
     }
 
-    pub(super) async fn recv_clhello(
-        &mut self,
-        cert_bytes: &[u8],
-    ) -> Result<String, CtrlStreamError> {
+    pub(super) async fn recv_clhello(&mut self, cert_bytes: &[u8]) -> Result<String, CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
 
@@ -127,10 +122,7 @@ impl CtrlStream {
     }
 
     pub(crate) async fn finish(&mut self) -> Result<(), CtrlStreamError> {
-        self.s_send
-            .flush()
-            .await
-            .map_err(CtrlStreamError::SinkFlush)?;
+        self.s_send.flush().await.map_err(CtrlStreamError::SinkFlush)?;
         self.s_send
             .get_mut()
             .get_mut()

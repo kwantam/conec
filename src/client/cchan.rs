@@ -10,9 +10,7 @@
 use super::ichan::IncomingChannelsEvent;
 use super::istream::{IncomingStreamsInner, NewInStream, StreamId};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
-use crate::types::{
-    outstream_init, ConecConn, ConnectingOutStream, ControlMsg, CtrlStream, OutStreamError,
-};
+use crate::types::{outstream_init, ConecConn, ConnectingOutStream, ControlMsg, CtrlStream, OutStreamError};
 use crate::util;
 
 use err_derive::Error;
@@ -81,11 +79,7 @@ impl ClientClientChanInner {
             _ => Ok(()),
         }?;
 
-        match self
-            .keepalive
-            .as_mut()
-            .map_or(Poll::Pending, |k| k.poll_next_unpin(cx))
-        {
+        match self.keepalive.as_mut().map_or(Poll::Pending, |k| k.poll_next_unpin(cx)) {
             Poll::Pending => Ok(()),
             Poll::Ready(None) => Err(ClientClientChanError::KeepaliveTimer),
             Poll::Ready(Some(_)) => {
@@ -198,9 +192,7 @@ impl ClientClientChanDriver {
     pub(super) fn new(inner: ClientClientChanRef, keepalive: bool) -> Self {
         if keepalive {
             let inner_locked = &mut inner.lock().unwrap();
-            inner_locked
-                .keepalive
-                .replace(interval(Duration::new(6, 666666666)));
+            inner_locked.keepalive.replace(interval(Duration::new(6, 666666666)));
         }
         Self(inner)
     }

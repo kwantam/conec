@@ -222,13 +222,8 @@ impl IncomingChannelsInner {
                                 async move {
                                     // set up new config and connect
                                     cfg.add_certificate_authority(trusted_cert?)?;
-                                    let (mut conn, ibi) = ConecConn::connect(
-                                        &mut endpoint,
-                                        &peer,
-                                        addr.into(),
-                                        Some(cfg),
-                                    )
-                                    .await?;
+                                    let (mut conn, ibi) =
+                                        ConecConn::connect(&mut endpoint, &peer, addr.into(), Some(cfg)).await?;
 
                                     // check certificate
                                     conn.read_cert_bytes();
@@ -301,11 +296,7 @@ impl IncomingChannelsRef {
     }
 }
 
-def_driver!(
-    IncomingChannelsRef,
-    IncomingChannelsDriver,
-    IncomingChannelsError
-);
+def_driver!(IncomingChannelsRef, IncomingChannelsDriver, IncomingChannelsError);
 impl Drop for IncomingChannelsDriver {
     fn drop(&mut self) {
         // if the driver dies, it takes everything with it

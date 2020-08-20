@@ -81,12 +81,7 @@ pub(crate) fn get_cert(cert_path: &Path) -> Result<Certificate, CertReadError> {
         Ok(Certificate::from_der(&tmp)?)
     } else {
         let chain = CertificateChain::from_pem(&tmp)?;
-        let cert_bytes = chain
-            .iter()
-            .next()
-            .ok_or(CertReadError::CertificateChain)?
-            .0
-            .clone();
+        let cert_bytes = chain.iter().next().ok_or(CertReadError::CertificateChain)?.0.clone();
         Ok(Certificate::from_der(cert_bytes.as_ref())?)
     }
 }

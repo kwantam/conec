@@ -10,10 +10,7 @@
 use rustls::{Certificate, ClientConfig, PrivateKey, TLSError};
 use std::sync::Arc;
 
-pub(super) fn build_rustls_client_config(
-    cert: Vec<u8>,
-    key: Vec<u8>,
-) -> Result<Arc<ClientConfig>, TLSError> {
+pub(super) fn build_rustls_client_config(cert: Vec<u8>, key: Vec<u8>) -> Result<Arc<ClientConfig>, TLSError> {
     Ok(Arc::new({
         let mut cfg = ClientConfig::new();
         cfg.versions = vec![rustls::ProtocolVersion::TLSv1_3];

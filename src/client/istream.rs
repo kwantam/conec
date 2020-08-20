@@ -107,9 +107,7 @@ impl IncomingStreamsInner {
             };
             let instream = read_stream.into_inner();
             let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
-            sender
-                .unbounded_send((peer, strmid(chanid), outstream, instream))
-                .ok();
+            sender.unbounded_send((peer, strmid(chanid), outstream, instream)).ok();
         });
     }
 
@@ -160,11 +158,7 @@ impl IncomingStreamsRef {
     }
 }
 
-def_driver!(
-    IncomingStreamsRef,
-    IncomingStreamsDriver,
-    IncomingStreamsError
-);
+def_driver!(IncomingStreamsRef, IncomingStreamsDriver, IncomingStreamsError);
 impl Drop for IncomingStreamsDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();

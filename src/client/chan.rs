@@ -7,11 +7,13 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::{ichan::{IncomingChannelsEvent, NewChannelError}, StreamPeer};
+use super::{
+    ichan::{IncomingChannelsEvent, NewChannelError},
+    StreamPeer,
+};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
-    OutStreamError, StreamTo,
+    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError, StreamTo,
 };
 use crate::util;
 
@@ -127,11 +129,7 @@ impl ClientChanInner {
     }
 
     fn handle_events(&mut self, cx: &mut Context) -> Result<(), ClientChanError> {
-        match self
-            .keepalive
-            .as_mut()
-            .map_or(Poll::Pending, |k| k.poll_next_unpin(cx))
-        {
+        match self.keepalive.as_mut().map_or(Poll::Pending, |k| k.poll_next_unpin(cx)) {
             Poll::Pending => Ok(()),
             Poll::Ready(None) => Err(ClientChanError::KeepaliveTimer),
             Poll::Ready(Some(_)) => {
@@ -141,10 +139,7 @@ impl ClientChanInner {
         }
     }
 
-    fn get_new_str_or_ch<T>(
-        sid: u32,
-        hash: &mut HashMap<u32, Option<T>>,
-    ) -> Result<T, ClientChanError> {
+    fn get_new_str_or_ch<T>(sid: u32, hash: &mut HashMap<u32, Option<T>>) -> Result<T, ClientChanError> {
         if let Some(chan) = hash.get_mut(&sid) {
             if let Some(chan) = chan.take() {
                 Ok(chan)
@@ -180,7 +175,8 @@ impl ClientChanInner {
                 ControlMsg::NewChannelOk(sid, addr, cert) => {
                     let (peer, chan) = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
                     if let Some(ref sender) = self.ichan_sender {
-                        sender.unbounded_send(IncomingChannelsEvent::NewChannel(peer, addr, cert, chan))
+                        sender
+                            .unbounded_send(IncomingChannelsEvent::NewChannel(peer, addr, cert, chan))
                             .map_err(|e| {
                                 if let IncomingChannelsEvent::NewChannel(_, _, _, chan) = e.into_inner() {
                                     chan.send(Err(NewChannelError::DriverPre)).ok();
@@ -201,8 +197,7 @@ impl ClientChanInner {
                 }
                 ControlMsg::CertReq(peer, sid, cert) => {
                     if let Some(ref sender) = self.ichan_sender {
-                        self.to_send
-                            .push_back(ControlMsg::CertOk(peer.clone(), sid));
+                        self.to_send.push_back(ControlMsg::CertOk(peer.clone(), sid));
                         sender
                             .unbounded_send(IncomingChannelsEvent::Certificate(peer, cert))
                             .or(Err(ClientChanError::OtherDriverHup))
@@ -277,9 +272,7 @@ impl ClientChanDriver {
     pub fn new(inner: ClientChanRef, keepalive: bool) -> Self {
         if keepalive {
             let inner_locked = &mut inner.lock().unwrap();
-            inner_locked
-                .keepalive
-                .replace(interval(Duration::new(6, 666666666)));
+            inner_locked.keepalive.replace(interval(Duration::new(6, 666666666)));
         }
         Self(inner)
     }

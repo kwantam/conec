@@ -19,8 +19,8 @@ mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{
-    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg,
-    CtrlStream, OutStreamError,
+    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
+    OutStreamError,
 };
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
 pub use chan::{CoordChanError, NewInStream};
@@ -32,9 +32,8 @@ use futures::{
     prelude::*,
 };
 use quinn::{
-    crypto::rustls::TLSError, Certificate, CertificateChain, ConnectionError, Endpoint,
-    EndpointError, Incoming, IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig,
-    ServerConfigBuilder,
+    crypto::rustls::TLSError, Certificate, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
+    IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig, ServerConfigBuilder,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -71,11 +70,7 @@ enum CoordEvent {
     ChanClose(String),
     NewCoStream(String, u32, ConnectingOutStreamHandle),
     NewStreamReq(String, String, u32),
-    NewStreamRes(
-        String,
-        u32,
-        Result<(SendStream, RecvStream), ConnectionError>,
-    ),
+    NewStreamRes(String, u32, Result<(SendStream, RecvStream), ConnectionError>),
     NewChannelReq(String, String, u32, Vec<u8>),
     NewChannelRes(String, u32, SocketAddr, Vec<u8>),
     NewChannelErr(String, u32),
@@ -117,9 +112,7 @@ impl CoordInner {
                             }
                             Ok(ctrl_peer) => ctrl_peer,
                         };
-                        sender
-                            .unbounded_send(CoordEvent::Accepted(conn, ctrl, ibi, peer))
-                            .ok();
+                        sender.unbounded_send(CoordEvent::Accepted(conn, ctrl, ibi, peer)).ok();
                     });
                     Ok(())
                 }
@@ -137,90 +130,89 @@ impl CoordInner {
         use CoordEvent::*;
         let mut accepted = 0;
         loop {
-            match self.events.poll_next_unpin(cx) {
-                Poll::Ready(Some(event)) => match event {
-                    Accepted(conn, ctrl, ibi, peer) => {
-                        if self.clients.get(&peer).is_some() {
-                            tokio::spawn(async move {
-                                let mut ctrl = ctrl;
-                                ctrl.send(ControlMsg::HelloError("name in use".to_string()))
-                                    .await
-                                    .ok();
-                                ctrl.finish().await.ok();
-                                drop(ctrl);
-                                drop(conn);
-                            });
-                        } else {
-                            let (inner, sender) = CoordChanRef::new(
-                                conn,
-                                ctrl,
-                                ibi,
-                                peer.clone(),
-                                self.sender.clone(),
-                                self.is_sender.clone(),
-                            );
-
-                            // spawn channel driver
-                            let driver = CoordChanDriver(inner.clone());
-                            tokio::spawn(async move { driver.await });
-
-                            self.clients.insert(peer, CoordChan { inner, sender });
-                        }
-                    }
-                    ChanClose(client) => {
-                        // client channel closed --- drop it from the queue
-                        self.clients.remove(&client);
-                    }
-                    NewStreamReq(from, to, sid) => {
-                        if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::NSReq(from, sid));
-                        } else if let Some(c_from) = self.clients.get(&from) {
-                            c_from.send(CoordChanEvent::NSErr(sid));
-                        } else {
-                            tracing::warn!("NSReq clients disappeared: {}:{} -> {}", from, sid, to);
-                        }
-                    }
-                    NewStreamRes(to, sid, result) => {
-                        if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::NSRes(sid, result));
-                        } else {
-                            tracing::warn!("NSRes client disappeared: {}:{}", to, sid);
-                        }
-                    }
-                    NewCoStream(to, sid, handle) => {
-                        if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::BiOut(sid, handle));
-                        } else {
-                            handle.send(Err(OutStreamError::NoSuchPeer(to))).ok();
-                        }
-                    }
-                    NewChannelReq(from, to, sid, cert) => {
-                        if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::NCReq(from, sid, cert));
-                        } else if let Some(c_from) = self.clients.get(&from) {
-                            c_from.send(CoordChanEvent::NCErr(sid));
-                        } else {
-                            tracing::warn!("NCReq clients disappeared: {}:{} -> {}", from, sid, to);
-                        }
-                    }
-                    NewChannelRes(to, sid, addr, cert) => {
-                        if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::NCRes(sid, addr, cert));
-                        } else {
-                            tracing::warn!("NCRes client disappeared: {}:{}", to, sid);
-                        }
-                    }
-                    NewChannelErr(to, sid) => {
-                        if let Some(c_to) = self.clients.get(&to) {
-                            c_to.send(CoordChanEvent::NCErr(sid));
-                        } else {
-                            tracing::warn!("NCErr client disappeared: {}:{}", to, sid);
-                        }
-                    }
-                },
-                Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
+            let event = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
-            }
+                Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
+                Poll::Ready(Some(event)) => event,
+            };
+            match event {
+                Accepted(conn, ctrl, ibi, peer) => {
+                    if self.clients.get(&peer).is_some() {
+                        tokio::spawn(async move {
+                            let mut ctrl = ctrl;
+                            ctrl.send(ControlMsg::HelloError("name in use".to_string())).await.ok();
+                            ctrl.finish().await.ok();
+                            drop(ctrl);
+                            drop(conn);
+                        });
+                    } else {
+                        let (inner, sender) = CoordChanRef::new(
+                            conn,
+                            ctrl,
+                            ibi,
+                            peer.clone(),
+                            self.sender.clone(),
+                            self.is_sender.clone(),
+                        );
+
+                        // spawn channel driver
+                        let driver = CoordChanDriver(inner.clone());
+                        tokio::spawn(async move { driver.await });
+
+                        self.clients.insert(peer, CoordChan { inner, sender });
+                    }
+                }
+                ChanClose(client) => {
+                    // client channel closed --- drop it from the queue
+                    self.clients.remove(&client);
+                }
+                NewStreamReq(from, to, sid) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::NSReq(from, sid));
+                    } else if let Some(c_from) = self.clients.get(&from) {
+                        c_from.send(CoordChanEvent::NSErr(sid));
+                    } else {
+                        tracing::warn!("NSReq clients disappeared: {}:{} -> {}", from, sid, to);
+                    }
+                }
+                NewStreamRes(to, sid, result) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::NSRes(sid, result));
+                    } else {
+                        tracing::warn!("NSRes client disappeared: {}:{}", to, sid);
+                    }
+                }
+                NewCoStream(to, sid, handle) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::BiOut(sid, handle));
+                    } else {
+                        handle.send(Err(OutStreamError::NoSuchPeer(to))).ok();
+                    }
+                }
+                NewChannelReq(from, to, sid, cert) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::NCReq(from, sid, cert));
+                    } else if let Some(c_from) = self.clients.get(&from) {
+                        c_from.send(CoordChanEvent::NCErr(sid));
+                    } else {
+                        tracing::warn!("NCReq clients disappeared: {}:{} -> {}", from, sid, to);
+                    }
+                }
+                NewChannelRes(to, sid, addr, cert) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::NCRes(sid, addr, cert));
+                    } else {
+                        tracing::warn!("NCRes client disappeared: {}:{}", to, sid);
+                    }
+                }
+                NewChannelErr(to, sid) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::NCErr(sid));
+                    } else {
+                        tracing::warn!("NCErr client disappeared: {}:{}", to, sid);
+                    }
+                }
+            };
             accepted += 1;
             if accepted >= MAX_LOOPS {
                 return true;
@@ -316,13 +308,7 @@ impl Coord {
     pub async fn new(config: CoordConfig) -> Result<(Self, IncomingStreams), CoordError> {
         // build configuration
         let (cert, key) = config.cert_and_key;
-        let qsc = Self::build_config(
-            config.stateless_retry,
-            config.keylog,
-            cert,
-            key,
-            config.client_ca,
-        )?;
+        let qsc = Self::build_config(config.stateless_retry, config.keylog, cert, key, config.client_ca)?;
 
         // build QUIC endpoint
         let mut endpoint = Endpoint::builder();

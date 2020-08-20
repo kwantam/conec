@@ -125,13 +125,10 @@ pub enum OutStreamError {
     InitStream(#[source] io::Error),
 }
 
-pub(crate) type ConnectingOutStreamHandle =
-    oneshot::Sender<Result<(OutStream, InStream), OutStreamError>>;
+pub(crate) type ConnectingOutStreamHandle = oneshot::Sender<Result<(OutStream, InStream), OutStreamError>>;
 
 ///! An outgoing stream that is currently connecting
-pub struct ConnectingOutStream(
-    pub(crate) oneshot::Receiver<Result<(OutStream, InStream), OutStreamError>>,
-);
+pub struct ConnectingOutStream(pub(crate) oneshot::Receiver<Result<(OutStream, InStream), OutStreamError>>);
 
 impl Future for ConnectingOutStream {
     type Output = Result<(OutStream, InStream), OutStreamError>;
