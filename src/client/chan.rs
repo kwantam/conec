@@ -67,8 +67,7 @@ impl Future for ConnectingChannel {
     type Output = Result<(SocketAddr, Vec<u8>), OutStreamError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut self.0;
-        match inner.poll_unpin(cx) {
+        match self.0.poll_unpin(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
             Poll::Ready(Ok(res)) => Poll::Ready(res),
@@ -298,7 +297,7 @@ impl ClientChan {
     pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
         // the new stream future is a channel that will contain the resulting stream
         let (sender, receiver) = oneshot::channel();
-        let inner = &mut *self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.new_streams.get(&sid).is_some() {
@@ -323,7 +322,7 @@ impl ClientChan {
     pub(super) fn new_channel(&self, to: String, sid: u32) -> ConnectingChannel {
         // future that will return the result from the coordinator
         let (sender, receiver) = oneshot::channel();
-        let inner = &mut *self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap();
 
         if inner.new_channels.get(&sid).is_some() {
             sender.send(Err(OutStreamError::StreamId)).ok();

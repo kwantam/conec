@@ -230,7 +230,7 @@ impl ClientClientChan {
     //     maybe: push uniqueness check up into Client?
     pub(super) fn new_stream(&self, sid: u32) -> ConnectingOutStream {
         let (sender, receiver) = oneshot::channel();
-        let inner = &mut *self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.sids.contains(&sid) {

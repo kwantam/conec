@@ -135,7 +135,7 @@ macro_rules! def_ref {
 
         impl Drop for $r {
             fn drop(&mut self) {
-                let inner = &mut *self.lock().unwrap();
+                let mut inner = self.lock().unwrap();
                 if let Some(x) = inner.ref_count.checked_sub(1) {
                     inner.ref_count = x;
                     if x == 0 {
@@ -157,7 +157,7 @@ macro_rules! def_driver {
         impl Future for $d {
             type Output = Result<(), $e>;
             fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-                let inner = &mut *self.0.lock().unwrap();
+                let mut inner = self.0.lock().unwrap();
                 match &inner.driver {
                     Some(w) if w.will_wake(cx.waker()) => (),
                     _ => inner.driver = Some(cx.waker().clone()),

@@ -125,8 +125,7 @@ impl Future for ConnectingOutStream {
     type Output = Result<(OutStream, InStream), OutStreamError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let inner = &mut self.0;
-        match inner.poll_unpin(cx) {
+        match self.0.poll_unpin(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
             Poll::Ready(Ok(res)) => Poll::Ready(res),
