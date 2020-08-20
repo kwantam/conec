@@ -206,11 +206,20 @@ impl ClientClientChanDriver {
 impl Drop for ClientClientChanDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();
-        inner.keepalive.take();
+        // tell ichan that we're closing now
         inner
             .ichan
             .unbounded_send(IncomingChannelsEvent::ChanClose(inner.peer.clone()))
             .ok();
+
+        // take down just our connection
+        inner.ctrl.close();
+        inner.conn.close(b"chan driver died");
+        inner.sender.disconnect();
+        inner.ichan.disconnect();
+        inner.to_send.clear();
+        inner.keepalive.take();
+        inner.sids.clear();
     }
 }
 

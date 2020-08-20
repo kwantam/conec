@@ -105,7 +105,8 @@ impl From<Option<String>> for StreamPeer {
 ///
 /// See [library documentation](../index.html) for an example of constructing a Client.
 pub struct Client {
-    endpoint: Endpoint,
+    #[allow(dead_code)]
+    endpoint: Option<Endpoint>,
     #[allow(dead_code)]
     in_streams: IncomingStreamsRef,
     #[allow(dead_code)]
@@ -170,8 +171,9 @@ impl Client {
         let (stream_sender, incoming_streams) = mpsc::unbounded();
 
         // incoming channels listener
-        let (in_channels, cert_sender) = if config.listen {
+        let (in_channels, cert_sender, endpoint) = if config.listen {
             let (in_channels, cert_sender) = IncomingChannelsRef::new(
+                endpoint,
                 config.id,
                 config.keepalive,
                 incoming,
@@ -179,9 +181,9 @@ impl Client {
             );
             let driver = IncomingChannelsDriver(in_channels.clone());
             tokio::spawn(async move { driver.await });
-            (Some(in_channels), Some(cert_sender))
+            (Some(in_channels), Some(cert_sender), None)
         } else {
-            (None, None)
+            (None, None, Some(endpoint))
         };
 
         // client-coordinator channel

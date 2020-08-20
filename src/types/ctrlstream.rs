@@ -148,6 +148,11 @@ impl CtrlStream {
             .await
             .map_err(CtrlStreamError::SinkFinish)
     }
+
+    pub(crate) fn close(&mut self) {
+        self.s_recv.get_mut().get_mut().stop(0u32.into()).ok();
+        self.s_send.get_mut().get_mut().reset(0u32.into());
+    }
 }
 
 impl Stream for CtrlStream {

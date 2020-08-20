@@ -158,6 +158,10 @@ impl ConecConn {
         }
     }
 
+    pub(crate) fn close(&self, reason: &[u8]) {
+        self.conn.close(0u32.into(), reason);
+    }
+
     pub(crate) fn open_bi(&mut self) -> OpenBi {
         self.conn.open_bi()
     }

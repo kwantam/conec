@@ -132,3 +132,11 @@ def_driver!(
     IncomingStreamsDriver,
     IncomingStreamsError
 );
+impl Drop for IncomingStreamsDriver {
+    fn drop(&mut self) {
+        let mut inner = self.0.lock().unwrap();
+        // maybe somehow a client-to-client channel can stay up IncomingStreamsDriver dies?
+        // so: just disconnect rather than killing NewInStream stream.
+        inner.sender.disconnect();
+    }
+}

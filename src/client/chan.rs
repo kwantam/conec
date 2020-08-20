@@ -278,8 +278,17 @@ impl ClientChanDriver {
 
 impl Drop for ClientChanDriver {
     fn drop(&mut self) {
-        let inner = &mut *self.0.lock().unwrap();
+        // if the driver dies, it takes everything with it
+        let mut inner = self.0.lock().unwrap();
+        inner.ctrl.close();
+        inner.conn.close(b"client chan driver died");
+        inner.to_send.clear();
+        inner.new_streams.clear();
+        inner.new_channels.clear();
         inner.keepalive.take();
+        if let Some(s) = inner.cert_sender.take() {
+            s.close_channel();
+        }
     }
 }
 

@@ -263,6 +263,16 @@ impl CoordRef {
 }
 
 def_driver!(pub(self), CoordRef; pub(self), CoordDriver; CoordError);
+impl Drop for CoordDriver {
+    fn drop(&mut self) {
+        let mut inner = self.0.lock().unwrap();
+        // fire sale everything must go
+        inner.clients.clear();
+        inner.sender.close_channel();
+        inner.events.close();
+        inner.is_sender.close_channel();
+    }
+}
 
 ///! A [Stream] of incoming data streams from Client or Coordinator.
 ///
@@ -342,7 +352,7 @@ impl Coord {
     }
 
     ///! Return the local address that Coord is bound to
-    pub(crate) fn local_addr(&self) -> std::net::SocketAddr {
+    pub fn local_addr(&self) -> std::net::SocketAddr {
         // unwrap is safe because Coord always has a bound socket
         self.endpoint.local_addr().unwrap()
     }

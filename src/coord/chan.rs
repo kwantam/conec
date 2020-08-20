@@ -355,12 +355,23 @@ impl CoordChanRef {
 def_driver!(CoordChanRef, CoordChanDriver, CoordChanError);
 impl Drop for CoordChanDriver {
     fn drop(&mut self) {
-        let inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap();
         // tell the coordinator that this channel is dead
         inner
             .coord
             .unbounded_send(CoordEvent::ChanClose(inner.peer.clone()))
             .ok();
+
+        // just take down this channel, don't stop the whole world
+        inner.ctrl.close();
+        inner.conn.close(b"coord driver died");
+        inner.coord.disconnect();
+        inner.sender.close_channel();
+        inner.events.close();
+        inner.to_send.clear();
+        inner.new_streams.clear();
+        inner.is_sender.disconnect();
+        inner.sids.clear();
     }
 }
 

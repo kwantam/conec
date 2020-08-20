@@ -14,7 +14,7 @@ use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 
 use err_derive::Error;
 use futures::{channel::mpsc, prelude::*};
-use quinn::{ConnectionError, Incoming, IncomingBiStreams};
+use quinn::{ConnectionError, Endpoint, Incoming, IncomingBiStreams};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -48,6 +48,7 @@ pub(super) enum IncomingChannelsEvent {
 }
 
 pub(super) struct IncomingChannelsInner {
+    endpoint: Endpoint,
     id: String,
     keepalive: bool,
     channels: Incoming,
@@ -168,6 +169,7 @@ impl IncomingChannelsInner {
 def_ref!(IncomingChannelsInner, IncomingChannelsRef);
 impl IncomingChannelsRef {
     pub(super) fn new(
+        endpoint: Endpoint,
         id: String,
         keepalive: bool,
         channels: Incoming,
@@ -176,6 +178,7 @@ impl IncomingChannelsRef {
         let (sender, events) = mpsc::unbounded();
         (
             Self(Arc::new(Mutex::new(IncomingChannelsInner {
+                endpoint,
                 id,
                 keepalive,
                 channels,
@@ -197,3 +200,14 @@ def_driver!(
     IncomingChannelsDriver,
     IncomingChannelsError
 );
+impl Drop for IncomingChannelsDriver {
+    fn drop(&mut self) {
+        // if the driver dies, it takes everything with it
+        let mut inner = self.0.lock().unwrap();
+        inner.certs.clear();
+        inner.chans.clear();
+        inner.strm_out.disconnect();
+        inner.sender.close_channel();
+        inner.events.close();
+    }
+}
