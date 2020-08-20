@@ -52,8 +52,9 @@
         - [x] client-to-client channels impl
         - [x] hold channels in ichan
         - [x] send ichan event to open new channel
-        - [ ] send ichan event to open new stream
+        - [x] send ichan event to open new stream
         - [x] who owns Endpoint? Clone in ichan? ((( Option<> in Client? )))
+        - [ ] allow Client to connect even though it is not listening?
     - [ ] automagically pick client-to-client vs proxied streams?
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client

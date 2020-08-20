@@ -26,9 +26,9 @@ use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
-use ichan::{IncomingChannelsDriver, IncomingChannelsRef};
+use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use ichan::{IncomingChannelsError, NewChannelError};
-pub use istream::{IncomingStreams, NewInStream};
+pub use istream::{IncomingStreams, NewInStream, StreamId};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
@@ -93,11 +93,7 @@ impl From<String> for StreamPeer {
 
 impl From<Option<String>> for StreamPeer {
     fn from(s: Option<String>) -> Self {
-        if let Some(s) = s {
-            Self::Client(s)
-        } else {
-            Self::Coord
-        }
+        s.map_or(Self::Coord, Self::Client)
     }
 }
 
@@ -109,9 +105,7 @@ pub struct Client {
     endpoint: Option<Endpoint>,
     #[allow(dead_code)]
     in_streams: IncomingStreamsRef,
-    #[allow(dead_code)]
-    in_channels: Option<IncomingChannelsRef>,
-    #[allow(dead_code)]
+    in_channels: IncomingChannels,
     coord: ClientChan,
     ctr: u32,
 }
@@ -172,7 +166,7 @@ impl Client {
 
         // incoming channels listener
         let (in_channels, ichan_sender, endpoint) = if config.listen {
-            let (in_channels, ichan_sender) = IncomingChannelsRef::new(
+            let (inner, sender) = IncomingChannelsRef::new(
                 endpoint,
                 config.id,
                 config.keepalive,
@@ -181,11 +175,11 @@ impl Client {
                 qcc,
                 config.client_ca,
             );
-            let driver = IncomingChannelsDriver(in_channels.clone());
+            let driver = IncomingChannelsDriver(inner.clone());
             tokio::spawn(async move { driver.await });
-            (Some(in_channels), Some(ichan_sender), None)
+            (IncomingChannels::new(inner, sender.clone()), Some(sender), None)
         } else {
-            (None, None, Some(endpoint))
+            (IncomingChannels::default(), None, Some(endpoint))
         };
 
         // client-coordinator channel
@@ -214,19 +208,44 @@ impl Client {
     }
 
     ///! Open a new stream to another client, proxied through the Coordinator
-    pub fn new_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
+    pub fn new_proxied_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
+        self.new_x_stream(to.into(), StreamId::Proxied)
+    }
+
+    ///! Open a new stream to another client directly
+    ///
+    /// It is only possible to open another stream to a client for which there is
+    /// an open channel, either because that client connected to this one or because
+    /// this client called [Client::new_channel].
+    ///
+    /// Opening will fail if Clients are not configured to accept incoming
+    /// connections (note that *both* clients must be configured in this way!).
+    pub fn new_direct_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
+        self.new_x_stream(to.into(), StreamId::Direct)
+    }
+
+    fn new_x_stream<F>(&mut self, to: StreamPeer, as_id: F) -> ConnectingOutStream
+    where
+        F: FnOnce(u32) -> StreamId,
+    {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.new_stream_with_id(to, ctr)
+        self.new_stream_with_id(to, as_id(ctr))
     }
 
     ///! Open a new proxied stream to another client with an explicit stream-id
     ///
     /// The `sid` argument must be different for every call to this function for a given Client object.
-    /// If mixing calls to this function with calls to [new_stream](Client::new_stream), avoid using
-    /// `sid >= 1<<31`: those values are used automatically by that function.
-    pub fn new_stream_with_id<T: Into<StreamPeer>>(&self, to: T, sid: u32) -> ConnectingOutStream {
-        self.coord.new_stream(to.into(), sid)
+    /// If mixing calls to this function with calls to [Client::new_proxied_stream] or
+    /// [Client::new_direct_stream], avoid using `sid >= 1<<31`, since these values are
+    /// used automatically by those functions.
+    pub fn new_stream_with_id<T: Into<StreamPeer>>(&self, to: T, sid: StreamId) -> ConnectingOutStream {
+        let to = to.into();
+        match sid {
+            StreamId::Proxied(sid) => self.coord.new_stream(to, sid),
+            StreamId::Direct(sid) if to.is_coord() => self.coord.new_stream(to, sid),
+            StreamId::Direct(sid) => self.in_channels.new_stream(to, sid),
+        }
     }
 
     ///! Open a new channel directly to another client

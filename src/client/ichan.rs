@@ -9,8 +9,12 @@
 
 use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
 use super::NewInStream;
+use super::StreamPeer;
 use crate::consts::MAX_LOOPS;
-use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
+use crate::types::{
+    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
+    OutStreamError,
+};
 
 use err_derive::Error;
 use futures::{
@@ -91,6 +95,7 @@ pub(super) enum IncomingChannelsEvent {
         Vec<u8>,
         oneshot::Sender<Result<(), NewChannelError>>,
     ),
+    NewStream(String, u32, ConnectingOutStreamHandle),
 }
 
 pub(super) struct IncomingChannelsInner {
@@ -242,6 +247,13 @@ impl IncomingChannelsInner {
                             .ok()
                     });
                 }
+                NewStream(peer, sid, handle) => {
+                    if let Some(chan) = self.chans.get(&peer) {
+                        chan.new_stream(sid, handle);
+                    } else {
+                        handle.send(Err(OutStreamError::NoSuchPeer(peer))).ok();
+                    }
+                }
             };
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -306,5 +318,59 @@ impl Drop for IncomingChannelsDriver {
         inner.strm_out.disconnect();
         inner.sender.close_channel();
         inner.events.close();
+    }
+}
+
+pub(super) struct IncomingChannels {
+    inner: Option<IncomingChannelsRef>,
+    sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+}
+
+impl IncomingChannels {
+    pub(super) fn new(inner: IncomingChannelsRef, sender: mpsc::UnboundedSender<IncomingChannelsEvent>) -> Self {
+        Self {
+            inner: Some(inner),
+            sender: Some(sender),
+        }
+    }
+
+    fn is_some(&self) -> bool {
+        self.inner.is_some() && self.sender.is_some()
+    }
+
+    pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
+        let (sender, receiver) = oneshot::channel();
+        if !self.is_some() {
+            sender.send(Err(OutStreamError::BadConfig)).ok();
+        } else if to.is_coord() {
+            sender
+                .send(Err(OutStreamError::NoSuchPeer("<Direct-to-Coord>".to_string())))
+                .ok();
+        } else {
+            use IncomingChannelsEvent::NewStream;
+            self.sender
+                .as_ref()
+                .unwrap()
+                .unbounded_send(NewStream(to.into_id().unwrap(), sid, sender))
+                .map_err(|e| {
+                    if let NewStream(_, _, sender) = e.into_inner() {
+                        sender.send(Err(OutStreamError::Event)).ok();
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .ok();
+        }
+
+        ConnectingOutStream(receiver)
+    }
+}
+
+impl Default for IncomingChannels {
+    fn default() -> Self {
+        IncomingChannels {
+            inner: None,
+            sender: None,
+        }
     }
 }

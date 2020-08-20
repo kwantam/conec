@@ -99,6 +99,12 @@ pub(crate) enum StreamTo {
 ///! Error variant output by [ConnectingOutStream] future
 #[derive(Debug, Error)]
 pub enum OutStreamError {
+    ///! Bad configuration for this connection
+    #[error(display = "Connection not supported in this configuration")]
+    BadConfig,
+    ///! Error injecting event
+    #[error(display = "Could not send event")]
+    Event,
     ///! Coordinator sent us an error
     #[error(display = "Coordinator responded with error")]
     Coord,

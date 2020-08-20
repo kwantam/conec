@@ -10,14 +10,11 @@
 use super::ichan::IncomingChannelsEvent;
 use super::istream::{IncomingStreamsInner, NewInStream, StreamId};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
-use crate::types::{outstream_init, ConecConn, ConnectingOutStream, ControlMsg, CtrlStream, OutStreamError};
+use crate::types::{outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError};
 use crate::util;
 
 use err_derive::Error;
-use futures::{
-    channel::{mpsc, oneshot},
-    prelude::*,
-};
+use futures::{channel::mpsc, prelude::*};
 use quinn::{ConnectionError, IncomingBiStreams};
 use std::collections::{HashSet, VecDeque};
 use std::io;
@@ -223,13 +220,12 @@ pub(super) struct ClientClientChan(pub(super) ClientClientChanRef);
 impl ClientClientChan {
     // XXX sid should also be unique w.r.t. proxied streams!!!
     //     maybe: push uniqueness check up into Client?
-    pub(super) fn new_stream(&self, sid: u32) -> ConnectingOutStream {
-        let (sender, receiver) = oneshot::channel();
+    pub(super) fn new_stream(&self, sid: u32, handle: ConnectingOutStreamHandle) {
         let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.sids.contains(&sid) {
-            sender.send(Err(OutStreamError::StreamId)).ok();
+            handle.send(Err(OutStreamError::StreamId)).ok();
         } else {
             inner.sids.insert(sid);
             let bi = inner.conn.open_bi();
@@ -245,15 +241,13 @@ impl ClientClientChan {
                     .await
                 {
                     Err(e) => {
-                        sender.send(Err(e)).ok();
+                        handle.send(Err(e)).ok();
                         return;
                     }
                     Ok(send_recv) => send_recv,
                 };
-                sender.send(Ok((send, recv))).ok();
+                handle.send(Ok((send, recv))).ok();
             });
         }
-
-        ConnectingOutStream(receiver)
     }
 }
