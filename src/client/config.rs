@@ -75,7 +75,7 @@ impl ClientConfig {
 
     ///! Set the Coordinator's port number to `port`
     pub fn set_port(&mut self, port: u16) -> &mut Self {
-        self.addr = ConecConnAddr::Portnum(port);
+        self.addr = port.into();
         self
     }
 
@@ -84,7 +84,7 @@ impl ClientConfig {
     /// Note that Client will still ensure that Coordinator's TLS certificate
     /// matches the name specified to [ClientConfig::new].
     pub fn set_addr(&mut self, addr: SocketAddr) -> &mut Self {
-        self.addr = ConecConnAddr::Sockaddr(addr);
+        self.addr = addr.into();
         self
     }
 

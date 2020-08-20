@@ -25,8 +25,8 @@ pub enum ConecConnError {
     SocketLocal(#[error(source)] io::Error),
     #[error(display = "Local connection error: {:?}", _0)]
     ConnectLocal(#[error(source)] ConnectError),
-    #[error(display = "Could not connect to coordinator")]
-    CouldNotConnect,
+    #[error(display = "Could not connect to coordinator: {:?}", _0)]
+    CouldNotConnect(#[source] ConnectionError),
     #[error(display = "Could not resolve coordinator hostname")]
     NameResolution,
     #[error(display = "Unexpected end of BiDi stream")]
@@ -70,32 +70,24 @@ impl ConecConn {
     ) -> Result<(Self, IncomingBiStreams), ConecConnError> {
         // no name resolution: explicit SocketAddr given
         if caddr.is_sockaddr() {
-            return match connect_with_option(endpoint, caddr.get_addr().unwrap(), cname, config)?
-                .await
-            {
-                Err(_) => Err(ConecConnError::CouldNotConnect),
-                Ok(c) => Ok(Self::new(c)),
-            };
+            return Ok(Self::new(
+                connect_with_option(endpoint, caddr.get_addr().unwrap(), cname, config)?.await?,
+            ));
         }
         // name resolution
         // only attempt to connect to an address of the same type as the endpoint's local socket
-        let mut resolved = false;
+        let mut last_err = ConecConnError::NameResolution;
         let use_ipv4 = endpoint.local_addr()?.is_ipv4();
         for coord_addr in (cname, caddr.get_port().unwrap())
             .to_socket_addrs()?
             .filter(|x| use_ipv4 == x.is_ipv4())
         {
-            resolved = true;
             match connect_with_option(endpoint, &coord_addr, cname, config.clone())?.await {
-                Err(_) => continue,
+                Err(e) => last_err = e.into(),
                 Ok(c) => return Ok(Self::new(c)),
             }
         }
-        if resolved {
-            Err(ConecConnError::CouldNotConnect)
-        } else {
-            Err(ConecConnError::NameResolution)
-        }
+        Err(last_err)
     }
 
     pub(crate) fn new(nc: NewConnection) -> (Self, IncomingBiStreams) {
@@ -141,11 +133,8 @@ impl ConecConn {
         let mut ctrl_stream = CtrlStream::new(cc_send, cc_recv);
 
         // expect the client's hello back, check cert name, otherwise try to send client an error
-        let peer_certs = self.conn.authentication_data().peer_certificates;
-        match ctrl_stream
-            .recv_clhello(peer_certs, &mut self.cert_bytes)
-            .await
-        {
+        self.read_cert_bytes();
+        match ctrl_stream.recv_clhello(&self.cert_bytes[..]).await {
             Ok(peer) => Ok((ctrl_stream, peer)),
             Err(e) => {
                 ctrl_stream
@@ -168,6 +157,13 @@ impl ConecConn {
 
     pub(crate) fn remote_addr(&self) -> SocketAddr {
         self.conn.remote_address()
+    }
+
+    pub(crate) fn read_cert_bytes(&mut self) {
+        let mut peer_certs = self.conn.authentication_data().peer_certificates;
+        if let Some(mut cert) = peer_certs.take().and_then(|p| p.iter().next().cloned()) {
+            std::mem::swap(&mut self.cert_bytes, &mut cert.0);
+        }
     }
 
     pub(crate) fn get_cert_bytes(&self) -> &[u8] {

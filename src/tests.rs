@@ -473,8 +473,7 @@ fn test_channel_loopback() {
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
-        let (addr, cert) = client.new_channel("client1".to_string()).await.unwrap();
-        println!("{:?} {:?}", addr, cert);
+        client.new_channel("client1".to_string()).await.unwrap();
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -518,8 +517,7 @@ fn test_channel_simple() {
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 2);
 
-        let (addr, cert) = client.new_channel("client2".to_string()).await.unwrap();
-        println!("{:?} {:?}", addr, cert);
+        client.new_channel("client2".to_string()).await.unwrap();
 
         Ok(()) as Result<(), std::io::Error>
     })

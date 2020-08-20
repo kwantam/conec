@@ -13,9 +13,13 @@ use crate::consts::MAX_LOOPS;
 use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 
 use err_derive::Error;
-use futures::{channel::mpsc, prelude::*};
-use quinn::{ConnectionError, Endpoint, Incoming, IncomingBiStreams};
+use futures::{
+    channel::{mpsc, oneshot},
+    prelude::*,
+};
+use quinn::{Certificate, ClientConfig, ConnectionError, Endpoint, Incoming, IncomingBiStreams};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -40,11 +44,53 @@ pub enum IncomingChannelsError {
     Control(#[source] ConecConnError),
 }
 
+///! Error variant when opening a new channel
+#[derive(Debug, Error)]
+pub enum NewChannelError {
+    ///! Could not parse certificate
+    #[error(display = "Parsing certificate: {:?}", _0)]
+    CertificateParse(#[source] quinn::ParseError),
+    ///! General certificate error
+    #[error(display = "Certificate: {:?}", _0)]
+    CertificateAuthority(#[source] webpki::Error),
+    ///! Certificate doesn't match what Coord told us
+    #[error(display = "Certificate mismatch")]
+    Certificate,
+    ///! Connecting failed
+    #[error(display = "Connecting to peer: {:?}", _0)]
+    Connecting(#[source] ConecConnError),
+    ///! Driver handoff failure before connecting
+    #[error(display = "Handing off pre-connection")]
+    DriverPre,
+    ///! Driver handoff failure after connecting
+    #[error(display = "Handing off post-connection: {:?}", _0)]
+    DriverPost(#[source] mpsc::SendError),
+    ///! New channel was canceled
+    #[error(display = "Canceled: {:?}", _0)]
+    Canceled(#[source] oneshot::Canceled),
+    ///! Configuration error
+    #[error(display = "Configuration error: no ichan driver")]
+    Config,
+    ///! Coordinator returned error
+    #[error(display = "Coordinator returned error")]
+    Coord,
+    ///! Reused channel id
+    #[error(display = "Reused channel id")]
+    ChannelId,
+}
+
 #[allow(clippy::large_enum_variant)]
 pub(super) enum IncomingChannelsEvent {
     Certificate(String, Vec<u8>),
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
+    Connected(ConecConn, CtrlStream, IncomingBiStreams, String),
     ChanClose(String),
+    NewChannel(
+        String,
+        SocketAddr,
+        Vec<u8>,
+        oneshot::Sender<Result<(), NewChannelError>>,
+    ),
 }
 
 pub(super) struct IncomingChannelsInner {
@@ -59,6 +105,8 @@ pub(super) struct IncomingChannelsInner {
     strm_out: mpsc::UnboundedSender<NewInStream>,
     sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
     events: mpsc::UnboundedReceiver<IncomingChannelsEvent>,
+    client_config: ClientConfig,
+    client_ca: Option<Certificate>,
 }
 
 impl IncomingChannelsInner {
@@ -142,8 +190,62 @@ impl IncomingChannelsInner {
                         }
                     }
                 }
+                Connected(conn, ctrl, ibi, peer) => {
+                    let inner = ClientClientChanRef::new(
+                        conn,
+                        ctrl,
+                        ibi,
+                        self.id.clone(),
+                        peer.clone(),
+                        self.strm_out.clone(),
+                        self.sender.clone(),
+                    );
+                    let driver = ClientClientChanDriver::new(inner.clone(), self.keepalive);
+                    tokio::spawn(async move { driver.await });
+                    self.chans.insert(peer, ClientClientChan(inner));
+                }
                 ChanClose(peer) => {
                     self.chans.remove(&peer);
+                }
+                NewChannel(peer, addr, cert, res_out) => {
+                    let mut endpoint = self.endpoint.clone();
+                    let mut cfg = self.client_config.clone();
+                    let trusted_cert = match self.client_ca.clone() {
+                        Some(cert) => Ok(cert),
+                        None => quinn::Certificate::from_der(&cert[..]),
+                    };
+                    let id = self.id.clone();
+                    let sender = self.sender.clone();
+                    tokio::spawn(async move {
+                        res_out
+                            .send(
+                                async move {
+                                    // set up new config and connect
+                                    cfg.add_certificate_authority(trusted_cert?)?;
+                                    let (mut conn, ibi) = ConecConn::connect(
+                                        &mut endpoint,
+                                        &peer,
+                                        addr.into(),
+                                        Some(cfg),
+                                    )
+                                    .await?;
+
+                                    // check certificate
+                                    conn.read_cert_bytes();
+                                    if conn.get_cert_bytes() != &cert[..] {
+                                        return Err(NewChannelError::Certificate);
+                                    }
+
+                                    // connect control stream and return to driver
+                                    let ctrl = conn.connect_ctrl(id).await?;
+                                    sender
+                                        .unbounded_send(Connected(conn, ctrl, ibi, peer))
+                                        .map_err(|e| e.into_send_error().into())
+                                }
+                                .await,
+                            )
+                            .ok()
+                    });
                 }
             };
             recvd += 1;
@@ -174,6 +276,8 @@ impl IncomingChannelsRef {
         keepalive: bool,
         channels: Incoming,
         strm_out: mpsc::UnboundedSender<NewInStream>,
+        client_config: ClientConfig,
+        client_ca: Option<Certificate>,
     ) -> (Self, mpsc::UnboundedSender<IncomingChannelsEvent>) {
         let (sender, events) = mpsc::unbounded();
         (
@@ -189,6 +293,8 @@ impl IncomingChannelsRef {
                 strm_out,
                 sender: sender.clone(),
                 events,
+                client_config,
+                client_ca,
             }))),
             sender,
         )

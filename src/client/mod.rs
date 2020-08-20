@@ -26,7 +26,7 @@ use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
-pub use ichan::IncomingChannelsError;
+pub use ichan::{IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
@@ -141,17 +141,18 @@ impl Client {
         if let Some(ca) = config.extra_ca {
             qccb.add_certificate_authority(ca)?;
         }
+        let qcc = qccb.build();
 
         // build the QUIC endpoint
         let mut endpoint = Endpoint::builder();
-        endpoint.default_client_config(qccb.build());
+        endpoint.default_client_config(qcc.clone());
         if config.listen {
             let qsc = Coord::build_config(
                 config.stateless_retry,
                 config.keylog,
                 cert,
                 privkey,
-                config.client_ca,
+                config.client_ca.clone(),
             )?;
             endpoint.listen(qsc);
         }
@@ -171,23 +172,25 @@ impl Client {
         let (stream_sender, incoming_streams) = mpsc::unbounded();
 
         // incoming channels listener
-        let (in_channels, cert_sender, endpoint) = if config.listen {
-            let (in_channels, cert_sender) = IncomingChannelsRef::new(
+        let (in_channels, ichan_sender, endpoint) = if config.listen {
+            let (in_channels, ichan_sender) = IncomingChannelsRef::new(
                 endpoint,
                 config.id,
                 config.keepalive,
                 incoming,
                 stream_sender.clone(),
+                qcc,
+                config.client_ca,
             );
             let driver = IncomingChannelsDriver(in_channels.clone());
             tokio::spawn(async move { driver.await });
-            (Some(in_channels), Some(cert_sender), None)
+            (Some(in_channels), Some(ichan_sender), None)
         } else {
             (None, None, Some(endpoint))
         };
 
         // client-coordinator channel
-        let coord = ClientChanRef::new(conn, ctrl, cert_sender);
+        let coord = ClientChanRef::new(conn, ctrl, ichan_sender);
         let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
         tokio::spawn(async move { driver.await });
         let coord = ClientChan(coord);

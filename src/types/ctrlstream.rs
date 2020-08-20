@@ -12,7 +12,7 @@ use crate::consts::VERSION;
 
 use err_derive::Error;
 use futures::prelude::*;
-use quinn::{CertificateChain, RecvStream, SendStream, WriteError};
+use quinn::{RecvStream, SendStream, WriteError};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::net::SocketAddr;
@@ -109,8 +109,7 @@ impl CtrlStream {
 
     pub(super) async fn recv_clhello(
         &mut self,
-        peer_certs: Option<CertificateChain>,
-        cert_bytes: &mut Vec<u8>,
+        cert_bytes: &[u8],
     ) -> Result<String, CtrlStreamError> {
         use ControlMsg::*;
         use CtrlStreamError::*;
@@ -118,16 +117,7 @@ impl CtrlStream {
         match self.try_next().await.map_err(RecvClHello)? {
             Some(ClHello(_, version)) if &version[..] != VERSION => Err(VersionMismatch(version)),
             Some(ClHello(peer, _)) => {
-                cert_bytes.extend_from_slice(
-                    peer_certs
-                        .ok_or(CertificateChain)?
-                        .iter()
-                        .next()
-                        .ok_or(CertificateChain)?
-                        .0
-                        .as_ref(),
-                );
-                let clt_cert = EndEntityCert::from(cert_bytes.as_ref())?;
+                let clt_cert = EndEntityCert::from(cert_bytes)?;
                 clt_cert.verify_is_valid_for_dns_name(DNSNameRef::try_from_ascii_str(&peer)?)?;
                 Ok(peer)
             }

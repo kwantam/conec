@@ -55,6 +55,18 @@ pub(crate) enum ConecConnAddr {
     Sockaddr(SocketAddr),
 }
 
+impl From<SocketAddr> for ConecConnAddr {
+    fn from(addr: SocketAddr) -> Self {
+        ConecConnAddr::Sockaddr(addr)
+    }
+}
+
+impl From<u16> for ConecConnAddr {
+    fn from(port: u16) -> Self {
+        ConecConnAddr::Portnum(port)
+    }
+}
+
 impl ConecConnAddr {
     pub(crate) fn is_sockaddr(&self) -> bool {
         match self {

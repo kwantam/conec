@@ -7,7 +7,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::{ichan::IncomingChannelsEvent, StreamPeer};
+use super::{ichan::{IncomingChannelsEvent, NewChannelError}, StreamPeer};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
     ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
@@ -22,7 +22,6 @@ use futures::{
 };
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -60,16 +59,15 @@ pub enum ClientChanError {
 }
 
 ///! A direct channel to a Client that is currently connecting
-pub struct ConnectingChannel(oneshot::Receiver<Result<(SocketAddr, Vec<u8>), OutStreamError>>);
-type ConnectingChannelHandle = oneshot::Sender<Result<(SocketAddr, Vec<u8>), OutStreamError>>;
-
+pub struct ConnectingChannel(oneshot::Receiver<Result<(), NewChannelError>>);
+type ConnectingChannelHandle = oneshot::Sender<Result<(), NewChannelError>>;
 impl Future for ConnectingChannel {
-    type Output = Result<(SocketAddr, Vec<u8>), OutStreamError>;
+    type Output = Result<(), NewChannelError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         match self.0.poll_unpin(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(NewChannelError::Canceled(e))),
             Poll::Ready(Ok(res)) => Poll::Ready(res),
         }
     }
@@ -82,10 +80,10 @@ pub(super) struct ClientChanInner {
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
     new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
-    new_channels: HashMap<u32, Option<ConnectingChannelHandle>>,
+    new_channels: HashMap<u32, Option<(String, ConnectingChannelHandle)>>,
     flushing: bool,
     keepalive: Option<Interval>,
-    cert_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+    ichan_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
 }
 
 impl ClientChanInner {
@@ -180,17 +178,29 @@ impl ClientChanInner {
                     Ok(())
                 }
                 ControlMsg::NewChannelOk(sid, addr, cert) => {
-                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
-                    chan.send(Ok((addr, cert))).ok();
+                    let (peer, chan) = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
+                    if let Some(ref sender) = self.ichan_sender {
+                        sender.unbounded_send(IncomingChannelsEvent::NewChannel(peer, addr, cert, chan))
+                            .map_err(|e| {
+                                if let IncomingChannelsEvent::NewChannel(_, _, _, chan) = e.into_inner() {
+                                    chan.send(Err(NewChannelError::DriverPre)).ok();
+                                } else {
+                                    unreachable!();
+                                }
+                            })
+                            .ok();
+                    } else {
+                        chan.send(Err(NewChannelError::Config)).ok();
+                    }
                     Ok(())
                 }
                 ControlMsg::NewChannelErr(sid) => {
-                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
-                    chan.send(Err(OutStreamError::Coord)).ok();
+                    let (_, chan) = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
+                    chan.send(Err(NewChannelError::Coord)).ok();
                     Ok(())
                 }
                 ControlMsg::CertReq(peer, sid, cert) => {
-                    if let Some(ref sender) = self.cert_sender {
+                    if let Some(ref sender) = self.ichan_sender {
                         self.to_send
                             .push_back(ControlMsg::CertOk(peer.clone(), sid));
                         sender
@@ -245,7 +255,7 @@ impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
-        cert_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+        ichan_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
     ) -> Self {
         Self(Arc::new(Mutex::new(ClientChanInner {
             conn,
@@ -257,7 +267,7 @@ impl ClientChanRef {
             new_channels: HashMap::new(),
             flushing: false,
             keepalive: None,
-            cert_sender,
+            ichan_sender,
         })))
     }
 }
@@ -285,7 +295,7 @@ impl Drop for ClientChanDriver {
         inner.new_streams.clear();
         inner.new_channels.clear();
         inner.keepalive.take();
-        if let Some(s) = inner.cert_sender.take() {
+        if let Some(s) = inner.ichan_sender.take() {
             s.close_channel();
         }
     }
@@ -293,6 +303,8 @@ impl Drop for ClientChanDriver {
 
 pub(super) struct ClientChan(pub(super) ClientChanRef);
 
+// XXX should we do this asynchronously via a channel instead?
+//     lock contention on a client channel seems like it should be low
 impl ClientChan {
     pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
         // the new stream future is a channel that will contain the resulting stream
@@ -325,10 +337,10 @@ impl ClientChan {
         let mut inner = self.0.lock().unwrap();
 
         if inner.new_channels.get(&sid).is_some() {
-            sender.send(Err(OutStreamError::StreamId)).ok();
+            sender.send(Err(NewChannelError::ChannelId)).ok();
         } else {
-            inner.to_send.push_back(ControlMsg::NewChannelReq(to, sid));
-            inner.new_channels.insert(sid, Some(sender));
+            inner.to_send.push_back(ControlMsg::NewChannelReq(to.clone(), sid));
+            inner.new_channels.insert(sid, Some((to, sender)));
             inner.wake();
         }
 

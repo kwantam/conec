@@ -172,6 +172,9 @@ impl ClientClientChanRef {
         sender: mpsc::UnboundedSender<NewInStream>,
         ichan: mpsc::UnboundedSender<IncomingChannelsEvent>,
     ) -> Self {
+        let mut to_send = VecDeque::new();
+        // send hello at startup
+        to_send.push_back(ControlMsg::CoHello);
         Self(Arc::new(Mutex::new(ClientClientChanInner {
             conn,
             ctrl,
@@ -182,7 +185,7 @@ impl ClientClientChanRef {
             ichan,
             ref_count: 0,
             driver: None,
-            to_send: VecDeque::new(),
+            to_send,
             flushing: false,
             keepalive: None,
             sids: HashSet::new(),
