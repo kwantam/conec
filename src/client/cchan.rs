@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::ichan::IncomingChannelsEvent;
-use super::istream::{IncomingStreamsInner, NewInStream};
+use super::istream::{IncomingStreamsInner, NewInStream, StreamId};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
     outstream_init, ConecConn, ConnectingOutStream, ControlMsg, CtrlStream, OutStreamError,
@@ -103,7 +103,7 @@ impl ClientClientChanInner {
                 Poll::Ready(None) => Err(ClientClientChanError::EndOfBiStream),
                 Poll::Ready(Some(r)) => r.map_err(ClientClientChanError::AcceptBiStream),
             }?;
-            IncomingStreamsInner::stream_init(send, recv, self.sender.clone());
+            IncomingStreamsInner::instream_init(send, recv, self.sender.clone(), StreamId::Direct);
             recvd += 1;
             if recvd >= MAX_LOOPS {
                 return Ok(true);

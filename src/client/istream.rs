@@ -25,7 +25,37 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
 ///! Output by [IncomingStreams]
-pub type NewInStream = (Option<String>, u32, OutStream, InStream);
+pub type NewInStream = (Option<String>, StreamId, OutStream, InStream);
+
+#[derive(Copy, Clone, Debug)]
+///! Incoming stream-id and whether it's proxied or direct
+pub enum StreamId {
+    ///! This stream is proxied
+    Proxied(u32),
+    ///! This stream is connected directly to other client
+    Direct(u32),
+}
+
+impl StreamId {
+    ///! This StreamId represents a proxied stream
+    pub fn is_proxied(&self) -> bool {
+        matches!(self, Self::Proxied(_))
+    }
+
+    ///! This StreamId represents a direct stream
+    pub fn is_direct(&self) -> bool {
+        matches!(self, Self::Direct(_))
+    }
+}
+
+impl From<StreamId> for u32 {
+    fn from(sid: StreamId) -> Self {
+        match sid {
+            StreamId::Proxied(sid) => sid,
+            StreamId::Direct(sid) => sid,
+        }
+    }
+}
 
 ///! Error variant output by [IncomingStreamsDriver]
 #[derive(Debug, Error)]
@@ -49,11 +79,14 @@ pub(super) struct IncomingStreamsInner {
 }
 
 impl IncomingStreamsInner {
-    pub(super) fn stream_init(
+    pub(super) fn instream_init<T: 'static>(
         send: SendStream,
         recv: RecvStream,
         sender: mpsc::UnboundedSender<NewInStream>,
-    ) {
+        strmid: T,
+    ) where
+        T: Send + FnOnce(u32) -> StreamId,
+    {
         tokio::spawn(async move {
             let mut read_stream = SymmetricallyFramed::new(
                 FramedRead::new(recv, LengthDelimitedCodec::new()),
@@ -61,13 +94,13 @@ impl IncomingStreamsInner {
             );
             let (peer, chanid) = match read_stream.try_next().await {
                 Err(e) => {
-                    tracing::warn!("stream_init: {:?}", e);
+                    tracing::warn!("instream_init: {:?}", e);
                     return;
                 }
                 Ok(msg) => match msg {
                     Some(peer_chanid) => peer_chanid,
                     None => {
-                        tracing::warn!("stream_init: unexpected end of stream");
+                        tracing::warn!("instream_init: unexpected end of stream");
                         return;
                     }
                 },
@@ -75,7 +108,7 @@ impl IncomingStreamsInner {
             let instream = read_stream.into_inner();
             let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
             sender
-                .unbounded_send((peer, chanid, outstream, instream))
+                .unbounded_send((peer, strmid(chanid), outstream, instream))
                 .ok();
         });
     }
@@ -95,7 +128,7 @@ impl IncomingStreamsInner {
                 Poll::Ready(None) => Err(IncomingStreamsError::EndOfBiStream),
                 Poll::Ready(Some(r)) => r.map_err(IncomingStreamsError::AcceptBiStream),
             }?;
-            Self::stream_init(send, recv, self.sender.clone());
+            Self::instream_init(send, recv, self.sender.clone(), StreamId::Proxied);
             recvd += 1;
             if recvd >= MAX_LOOPS {
                 return Ok(true);
