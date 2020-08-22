@@ -12,17 +12,25 @@
   Clients know (by configuration) the identity of Coordinator (say,
   a hostname for which Coordinator has a TLS server cert).
 
-  Clients authenticate to Coordinator either with a TLS certificate.
+  Clients authenticate to Coordinator with a TLS certificate.
   By default, clients generate ephemeral self-signed certificates;
   they can also be configured to use long-lived certs signed by a
   CA that Coordinator trusts.
 
 - The basic abstraction is a channel, which connects two entities
   (Client or Coordinator). A channel comprises one bi-directional
-  control stream and zero or more bidirectional data streams.
+  control stream and zero or more bidirectional data streams
+  (streams defined below).
 
   Every Client shares a channel with Coordinator: at startup, Client
   connects to Coordinator.
+
+  Clients can ask Coordinator to help them open a channel to another
+  Client. In this version there is no explicit support for NAT traversal,
+  but because of the low-level networking details clients behind
+  [full-cone NAT](https://en.wikipedia.org/wiki/Network_address_translation#Methods_of_translation)
+  should get traversal for free. In a future version this will be
+  expanded to include address- and port-restricted-cone nats.
 
 - A data stream accepts a sequence of (known length) messages from
   its writer. The data stream's reader receives these messages
@@ -30,9 +38,10 @@
   a full message or nothing. No support for out-of-order reads;
   use multiple data streams instead.
 
-- In this version, Coordinator proxies data streams between Clients.
-  In the future, Clients will be able to directly connect to one
-  another with Coordinator's help.
+- Control streams are used internally to manage the connection.
+  There user code does not interact with them except via the API
+  (e.g., in most cases opening a data stream entails sending and
+  receiving messages on a control stream).
 
 ## TODOs / functionality / future features / maybes
 
@@ -54,14 +63,19 @@
         - [x] send ichan event to open new channel
         - [x] send ichan event to open new stream
         - [x] who owns Endpoint? Clone in ichan? ((( Option<> in Client? )))
-        - [ ] allow Client to connect even though it is not listening?
-    - [ ] automagically pick client-to-client vs proxied streams?
+        - [ ] allow Client to connect even though it is not listening
+        - [ ] allow Client to close a channel to another client
+            - seems like there could be a bug somewhere that close/reopen would trigger, so good as a test case at least
+    - [ ] add intf to automagically pick between client-to-client and proxied streams
+        - super magical version: automatically initiate a new client channel
+        - less magical version: only use client channel if one is already open
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
     - [ ] NAT ~detection~ traversal
         - probably not so hard: clone UdpSocket, send a few packets on a timer
           when we try to connect directly to another client. This should work
           for most cases that are not symmetric NATs.
+        - even without this, full-cone NAT traversal will already work
     - [ ] more `tracing`
     - [ ] check drop notifications for critical pieces of Coord/Chan
 - questions / maybes
