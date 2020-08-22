@@ -98,33 +98,27 @@ impl ClientChanInner {
     fn new_stream(&mut self, chan: ConnectingOutStreamHandle, sid: StreamTo) {
         let bi = self.conn.open_bi();
         tokio::spawn(async move {
-            // get the new streams
-            let (send, recv) = match bi.await {
-                Ok(sr) => sr,
-                Err(e) => {
-                    chan.send(Err(OutStreamError::OpenBi(e))).ok();
-                    return;
+            chan.send(
+                async {
+                    // get the new stream
+                    let (send, recv) = bi.await.map_err(OutStreamError::OpenBi)?;
+
+                    // write sid to it
+                    let mut write_stream = SymmetricallyFramed::new(
+                        FramedWrite::new(send, LengthDelimitedCodec::new()),
+                        SymmetricalBincode::<StreamTo>::default(),
+                    );
+                    write_stream.send(sid).await.map_err(OutStreamError::InitMsg)?;
+                    write_stream.flush().await.map_err(OutStreamError::Flush)?;
+
+                    // send resulting OutStream to the receiver
+                    let outstream = write_stream.into_inner();
+                    let instream = FramedRead::new(recv, LengthDelimitedCodec::new());
+                    Ok((outstream, instream))
                 }
-            };
-
-            // write sid to it
-            let mut write_stream = SymmetricallyFramed::new(
-                FramedWrite::new(send, LengthDelimitedCodec::new()),
-                SymmetricalBincode::<StreamTo>::default(),
-            );
-            if let Err(e) = write_stream.send(sid).await {
-                chan.send(Err(OutStreamError::InitMsg(e))).ok();
-                return;
-            }
-            if let Err(e) = write_stream.flush().await {
-                chan.send(Err(OutStreamError::Flush(e))).ok();
-                return;
-            };
-
-            // send resulting OutStream to the receiver
-            let outstream = write_stream.into_inner();
-            let instream = FramedRead::new(recv, LengthDelimitedCodec::new());
-            chan.send(Ok((outstream, instream))).ok();
+                .await,
+            )
+            .ok();
         });
     }
 

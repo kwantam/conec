@@ -230,7 +230,8 @@ fn test_stream_bi_multi() {
 
         assert_eq!(coord.num_clients(), 2);
 
-        let mut streams = Vec::new();
+        let mut streams = Vec::with_capacity(4);
+        #[allow(clippy::same_item_push)] // suppress false positive
         for _ in 0..4usize {
             let (s12, r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
             let (sender, _strmid, s21, r12) = inc2.next().await.unwrap();
@@ -630,6 +631,7 @@ fn test_keepalive() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
+        time::delay_for(Duration::new(12, 0)).await;
         assert_eq!(coord.num_clients(), 1);
 
         Ok(()) as Result<(), std::io::Error>

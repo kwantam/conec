@@ -94,16 +94,14 @@ impl IncomingStreamsInner {
             );
             let (peer, chanid) = match read_stream.try_next().await {
                 Err(e) => {
-                    tracing::warn!("instream_init: {:?}", e);
+                    tracing::warn!("instream_init: error: {:?}", e);
                     return;
                 }
-                Ok(msg) => match msg {
-                    Some(peer_chanid) => peer_chanid,
-                    None => {
-                        tracing::warn!("instream_init: unexpected end of stream");
-                        return;
-                    }
-                },
+                Ok(None) => {
+                    tracing::warn!("instream_init: unexpected end of stream");
+                    return;
+                }
+                Ok(Some(peer_chanid)) => peer_chanid,
             };
             let instream = read_stream.into_inner();
             let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());

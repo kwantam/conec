@@ -220,23 +220,17 @@ impl CoordChanInner {
                         self.sids.insert(sid);
                         let bi = self.conn.open_bi();
                         tokio::spawn(async move {
-                            let (send, recv) = match bi
-                                .err_into::<OutStreamError>()
-                                .and_then(|(send, recv)| async move {
-                                    outstream_init(send, None, sid)
-                                        .await
-                                        .map(|send| (send, FramedRead::new(recv, LengthDelimitedCodec::new())))
-                                })
-                                .await
-                            {
-                                Err(e) => {
-                                    handle.send(Err(e)).ok();
-                                    return;
-                                }
-                                Ok(send_recv) => send_recv,
-                            };
-
-                            handle.send(Ok((send, recv))).ok();
+                            handle
+                                .send(
+                                    bi.err_into::<OutStreamError>()
+                                        .and_then(|(send, recv)| async {
+                                            outstream_init(send, None, sid).await.map(|send| {
+                                                (send, FramedRead::new(recv, LengthDelimitedCodec::new()))
+                                            })
+                                        })
+                                        .await,
+                                )
+                                .ok();
                         });
                     }
                 }
@@ -268,13 +262,11 @@ impl CoordChanInner {
                         tracing::warn!("drive_ibi_recv: {:?}", e);
                         return;
                     }
-                    Ok(msg) => match msg {
-                        Some(sid) => sid,
-                        None => {
-                            tracing::warn!("drive_ibi_recv: unexpected end of stream");
-                            return;
-                        }
-                    },
+                    Ok(None) => {
+                        tracing::warn!("drive_ibi_recv: unexpected end of stream");
+                        return;
+                    }
+                    Ok(Some(sid)) => sid,
                 };
                 let recv = read_stream.into_inner();
                 let send = FramedWrite::new(send, LengthDelimitedCodec::new());

@@ -63,6 +63,9 @@ pub enum CoordError {
     ///! Error from JoinHandle future
     #[error(display = "Join eror: {:?}", _0)]
     Join(#[source] JoinError),
+    ///! Error handing off result to driver
+    #[error(display = "Error sending to driver: {:?}", _0)]
+    Driver(#[source] mpsc::SendError),
 }
 
 enum CoordEvent {
@@ -91,32 +94,26 @@ impl CoordInner {
     fn drive_accept(&mut self, cx: &mut Context) -> Result<bool, CoordError> {
         let mut accepted = 0;
         loop {
-            match self.incoming.poll_next_unpin(cx) {
+            let conn = match self.incoming.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => Err(CoordError::EndOfIncomingStream),
-                Poll::Ready(Some(incoming)) => {
-                    let sender = self.sender.clone();
-                    tokio::spawn(async move {
-                        use CoordError::*;
-                        let (mut conn, mut ibi) = match incoming.await {
-                            Err(e) => {
-                                tracing::warn!("AcceptError: {}", Connect(e));
-                                return;
-                            }
-                            Ok(conn) => ConecConn::new(conn),
-                        };
-                        let (ctrl, peer) = match conn.accept_ctrl(&mut ibi).await {
-                            Err(e) => {
-                                tracing::warn!("AcceptError: {}", Control(e));
-                                return;
-                            }
-                            Ok(ctrl_peer) => ctrl_peer,
-                        };
-                        sender.unbounded_send(CoordEvent::Accepted(conn, ctrl, ibi, peer)).ok();
-                    });
-                    Ok(())
-                }
+                Poll::Ready(Some(conn)) => Ok(conn),
             }?;
+            let sender = self.sender.clone();
+            tokio::spawn(async move {
+                use CoordError::*;
+                if let Err(e) = async {
+                    let (mut conn, mut ibi) = conn.await.map_err(Connect).map(ConecConn::new)?;
+                    let (ctrl, peer) = conn.accept_ctrl(&mut ibi).await.map_err(Control)?;
+                    sender
+                        .unbounded_send(CoordEvent::Accepted(conn, ctrl, ibi, peer))
+                        .map_err(|e| Driver(e.into_send_error()))
+                }
+                .await
+                {
+                    tracing::warn!("coord drive_accept: {:?}", e);
+                }
+            });
             accepted += 1;
             if accepted >= MAX_LOOPS {
                 return Ok(true);
@@ -158,7 +155,6 @@ impl CoordInner {
                         // spawn channel driver
                         let driver = CoordChanDriver(inner.clone());
                         tokio::spawn(async move { driver.await });
-
                         self.clients.insert(peer, CoordChan { inner, sender });
                     }
                 }

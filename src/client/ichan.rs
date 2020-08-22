@@ -47,6 +47,9 @@ pub enum IncomingChannelsError {
     ///! Error connecting control channel to new Client
     #[error(display = "Error connecting control channel: {:?}", _0)]
     Control(#[source] ConecConnError),
+    ///! Error handing off result to driver
+    #[error(display = "Error sending to driver: {:?}", _0)]
+    Driver(#[source] mpsc::SendError),
 }
 
 ///! Error variant when opening a new channel
@@ -135,23 +138,17 @@ impl IncomingChannelsInner {
             let sender = self.sender.clone();
             tokio::spawn(async move {
                 use IncomingChannelsError::*;
-                let (mut conn, mut ibi) = match conn.await {
-                    Err(e) => {
-                        tracing::warn!("drive_accept: {:?}", Connect(e));
-                        return;
-                    }
-                    Ok(new_conn) => ConecConn::new(new_conn),
-                };
-                let (ctrl, peer) = match conn.accept_ctrl(&mut ibi).await {
-                    Err(e) => {
-                        tracing::warn!("drive_accept: {:?}", Control(e));
-                        return;
-                    }
-                    Ok(ctrl_peer) => ctrl_peer,
-                };
-                sender
-                    .unbounded_send(IncomingChannelsEvent::Accepted(conn, ctrl, ibi, peer))
-                    .ok();
+                if let Err(e) = async {
+                    let (mut conn, mut ibi) = conn.await.map_err(Connect).map(ConecConn::new)?;
+                    let (ctrl, peer) = conn.accept_ctrl(&mut ibi).await.map_err(Control)?;
+                    sender
+                        .unbounded_send(IncomingChannelsEvent::Accepted(conn, ctrl, ibi, peer))
+                        .map_err(|e| Driver(e.into_send_error()))
+                }
+                .await
+                {
+                    tracing::warn!("ichan drive_accept: {:?}", e);
+                }
             });
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -195,7 +192,7 @@ impl IncomingChannelsInner {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
                                 let errmsg = if dup {
-                                    ControlMsg::HelloError("duplicate client".to_string())
+                                    ControlMsg::HelloError("duplicate channel".to_string())
                                 } else {
                                     ControlMsg::HelloError("cert mismatch".to_string())
                                 };
@@ -262,8 +259,7 @@ impl IncomingChannelsInner {
                     let id = self.id.clone();
                     let sender = self.sender.clone();
                     tokio::spawn(async move {
-                        let epeer = peer.clone();
-                        match async move {
+                        match async {
                             // set up new config and connect
                             cfg.add_certificate_authority(trusted_cert?)?;
                             let (mut conn, ibi) =
@@ -285,12 +281,12 @@ impl IncomingChannelsInner {
                         .await
                         {
                             Err(e) => {
-                                sender.unbounded_send(ChanClose(epeer)).ok();
+                                sender.unbounded_send(ChanClose(peer)).ok();
                                 handle.send(Err(e)).ok();
                             }
                             Ok((conn, ctrl, ibi)) => {
                                 sender
-                                    .unbounded_send(Connected(conn, ctrl, ibi, epeer, handle))
+                                    .unbounded_send(Connected(conn, ctrl, ibi, peer, handle))
                                     .map_err(|e| {
                                         if let Connected(_, _, _, _, handle) = e.into_inner() {
                                             handle.send(Err(NewChannelError::DriverPost)).ok();

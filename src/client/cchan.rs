@@ -231,22 +231,17 @@ impl ClientClientChan {
             let bi = inner.conn.open_bi();
             let id = inner.id.clone();
             tokio::spawn(async move {
-                let (send, recv) = match bi
-                    .err_into::<OutStreamError>()
-                    .and_then(|(send, recv)| async move {
-                        outstream_init(send, Some(id), sid)
-                            .await
-                            .map(|send| (send, FramedRead::new(recv, LengthDelimitedCodec::new())))
-                    })
-                    .await
-                {
-                    Err(e) => {
-                        handle.send(Err(e)).ok();
-                        return;
-                    }
-                    Ok(send_recv) => send_recv,
-                };
-                handle.send(Ok((send, recv))).ok();
+                handle
+                    .send(
+                        bi.err_into::<OutStreamError>()
+                            .and_then(|(send, recv)| async {
+                                outstream_init(send, Some(id), sid)
+                                    .await
+                                    .map(|send| (send, FramedRead::new(recv, LengthDelimitedCodec::new())))
+                            })
+                            .await,
+                    )
+                    .ok();
             });
         }
     }
