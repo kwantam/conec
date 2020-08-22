@@ -201,7 +201,7 @@ impl Drop for ClientClientChanDriver {
         // tell ichan that we're closing now
         inner
             .ichan
-            .unbounded_send(IncomingChannelsEvent::ChanClose(inner.peer.clone()))
+            .unbounded_send(IncomingChannelsEvent::ChanClose(inner.peer.clone(), None))
             .ok();
 
         // take down just our connection

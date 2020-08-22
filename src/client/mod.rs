@@ -26,7 +26,7 @@ use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
-use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
+use ichan::{ClosingChannel, IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use ichan::{IncomingChannelsError, NewChannelError};
 pub use istream::{IncomingStreams, NewInStream, StreamId};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
@@ -64,7 +64,8 @@ pub enum ClientError {
     NewStream(#[source] ClientChanError),
 }
 
-///! The target of a call to [Client::new_stream]: either the coordinator or another client.
+///! The target of a call to [Client::new_proxied_stream] or [Client::new_direct_stream]:
+///! either the coordinator or another client.
 pub enum StreamPeer {
     /// The other endpoint is the coordinator
     Coord,
@@ -257,5 +258,13 @@ impl Client {
     /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
     pub fn new_channel_with_id(&self, to: String, cid: u32) -> ConnectingChannel {
         self.coord.new_channel(to, cid)
+    }
+
+    ///! Close an open channel
+    ///
+    /// Currently, attempting to open a channel after closing it causes what appears
+    /// to be a transport error. XXX(#1)
+    pub fn close_channel(&self, peer: String) -> ClosingChannel {
+        self.in_channels.close_channel(peer)
     }
 }

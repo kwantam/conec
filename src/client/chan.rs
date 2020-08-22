@@ -60,20 +60,15 @@ pub enum ClientChanError {
     KeepaliveTimer,
 }
 
-///! A direct channel to a Client that is currently connecting
-pub struct ConnectingChannel(oneshot::Receiver<Result<(), NewChannelError>>);
-pub(crate) type ConnectingChannelHandle = oneshot::Sender<Result<(), NewChannelError>>;
-impl Future for ConnectingChannel {
-    type Output = Result<(), NewChannelError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self.0.poll_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(NewChannelError::Canceled(e))),
-            Poll::Ready(Ok(res)) => Poll::Ready(res),
-        }
-    }
-}
+def_cs_future!(
+    ConnectingChannel,
+    pub(crate),
+    ConnectingChannelHandle,
+    pub(self),
+    (),
+    NewChannelError,
+    doc = "A direct channel to a Client that is currently connecting"
+);
 
 pub(super) struct ClientChanInner {
     conn: ConecConn,

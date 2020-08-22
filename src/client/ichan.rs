@@ -29,7 +29,31 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-///! Error variant output by [IncomingChannelsDriver]
+def_cs_future!(
+    ClosingChannel,
+    ClosingChannelHandle,
+    (),
+    ClosingChannelError,
+    doc = "A channel that is being closed"
+);
+///! Error variant output by [ClosingChannel]
+#[derive(Debug, Error)]
+pub enum ClosingChannelError {
+    ///! Incoming channels receiver disappeared
+    #[error(display = "IncomingChannels receiver is gone")]
+    ReceiverClosed,
+    ///! Tried to close a channel that doesn't exist
+    #[error(display = "Nonexistent channel")]
+    Nonexistent,
+    ///! New channel was canceled
+    #[error(display = "Canceled: {:?}", _0)]
+    Canceled(#[source] oneshot::Canceled),
+    ///! Error injecting event
+    #[error(display = "Could not send event")]
+    Event,
+}
+
+///! Error variant output by the IncomingChannels driver
 #[derive(Debug, Error)]
 pub enum IncomingChannelsError {
     ///! Incoming channels receiver disappeared
@@ -100,7 +124,7 @@ pub(super) enum IncomingChannelsEvent {
         String,
         ConnectingChannelHandle,
     ),
-    ChanClose(String),
+    ChanClose(String, Option<ClosingChannelHandle>),
     NewChannel(String, SocketAddr, Vec<u8>, ConnectingChannelHandle),
     NewStream(String, u32, ConnectingOutStreamHandle),
 }
@@ -239,8 +263,14 @@ impl IncomingChannelsInner {
                         }
                     }
                 }
-                ChanClose(peer) => {
-                    self.chans.remove(&peer);
+                ChanClose(peer, handle) => {
+                    let res = self.chans.remove(&peer);
+                    if let Some(handle) = handle {
+                        match res {
+                            None => handle.send(Err(ClosingChannelError::Nonexistent)).ok(),
+                            Some(_) => handle.send(Ok(())).ok(),
+                        };
+                    }
                 }
                 NewChannel(peer, _, _, handle) if self.chans.get(&peer).is_some() => {
                     handle.send(Err(NewChannelError::Duplicate)).ok();
@@ -281,7 +311,7 @@ impl IncomingChannelsInner {
                         .await
                         {
                             Err(e) => {
-                                sender.unbounded_send(ChanClose(peer)).ok();
+                                sender.unbounded_send(ChanClose(peer, None)).ok();
                                 handle.send(Err(e)).ok();
                             }
                             Ok((conn, ctrl, ibi)) => {
@@ -411,5 +441,22 @@ impl IncomingChannels {
         }
 
         ConnectingOutStream(receiver)
+    }
+
+    pub(super) fn close_channel(&self, peer: String) -> ClosingChannel {
+        let (sender, receiver) = oneshot::channel();
+        use IncomingChannelsEvent::ChanClose;
+        self.sender
+            .unbounded_send(ChanClose(peer, Some(sender)))
+            .map_err(|e| {
+                if let ChanClose(_, Some(sender)) = e.into_inner() {
+                    sender.send(Err(ClosingChannelError::Event)).ok();
+                } else {
+                    unreachable!()
+                }
+            })
+            .ok();
+
+        ClosingChannel(receiver)
     }
 }

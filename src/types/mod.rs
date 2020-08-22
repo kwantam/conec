@@ -128,19 +128,12 @@ pub enum OutStreamError {
     InitStream(#[source] io::Error),
 }
 
-pub(crate) type ConnectingOutStreamHandle = oneshot::Sender<Result<(OutStream, InStream), OutStreamError>>;
-
-///! An outgoing stream that is currently connecting
-pub struct ConnectingOutStream(pub(crate) oneshot::Receiver<Result<(OutStream, InStream), OutStreamError>>);
-
-impl Future for ConnectingOutStream {
-    type Output = Result<(OutStream, InStream), OutStreamError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self.0.poll_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(OutStreamError::Canceled(e))),
-            Poll::Ready(Ok(res)) => Poll::Ready(res),
-        }
-    }
-}
+def_cs_future!(
+    ConnectingOutStream,
+    pub(crate),
+    ConnectingOutStreamHandle,
+    pub(crate),
+    (OutStream, InStream),
+    OutStreamError,
+    doc = "An outgoing stream that is connecting"
+);

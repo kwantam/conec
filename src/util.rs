@@ -167,3 +167,33 @@ macro_rules! def_driver {
         }
     };
 }
+
+macro_rules! def_cs_future {
+    ($f:tt, $h:tt, $ok:ty, $e:ty, $d:meta) => {
+        def_cs_future!($f, pub(self), $h, pub(self), $ok, $e, $d);
+    };
+    ($f:tt, $vh:vis, $h:tt, $vf:vis, $ok:ty, $e:ty, $d:meta) => {
+        $vh type $h = oneshot::Sender<Result<$ok, $e>>;
+        #[$d]
+        pub struct $f($vf oneshot::Receiver<Result<$ok, $e>>);
+        def_flat_future!($f, $ok, $e);
+    };
+}
+
+macro_rules! def_flat_future {
+    ($f:ty, $ok:ty, $e:ty) => {
+        def_flat_future!($f, $ok, $e, Canceled, 0);
+    };
+    ($f:ty, $ok:ty, $e:ty, $v:tt, $fld:tt) => {
+        impl Future for $f {
+            type Output = Result<$ok, $e>;
+            fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+                match self.$fld.poll_unpin(cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(<$e>::$v(e))),
+                    Poll::Ready(Ok(res)) => Poll::Ready(res),
+                }
+            }
+        }
+    };
+}

@@ -367,14 +367,4 @@ impl Coord {
     }
 }
 
-impl Future for Coord {
-    type Output = Result<(), CoordError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self.driver_handle.poll_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(CoordError::Join(e))),
-            Poll::Ready(Ok(res)) => Poll::Ready(res),
-        }
-    }
-}
+def_flat_future!(Coord, (), CoordError, Join, driver_handle);

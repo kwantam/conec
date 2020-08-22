@@ -406,7 +406,7 @@ fn test_stream_coord_to_client() {
 }
 
 #[test]
-fn test_channel_loopback_error() {
+fn test_channel_errors() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -440,6 +440,10 @@ fn test_channel_loopback_error() {
             .new_channel("client1".to_string())
             .await
             .expect_err("should not be able to connect to self");
+        client
+            .close_channel("client1".to_string())
+            .await
+            .expect_err("should get err closing nonexistent channel");
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -500,6 +504,80 @@ fn test_channel_simple() {
         s21.send(rec).await.unwrap();
         let rec = r21.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_channel_close() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client, _inc) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (mut client2, mut inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+        assert_eq!(coord.num_clients(), 2);
+
+        client
+            .new_direct_stream("client2".to_string())
+            .await
+            .map(|_| ())
+            .expect_err("should have needed to connect first");
+        client.new_channel("client2".to_string()).await.unwrap();
+        time::delay_for(Duration::from_millis(40)).await;
+        client
+            .new_channel("client2".to_string())
+            .await
+            .expect_err("duplicate channel should be rejected");
+        time::delay_for(Duration::from_millis(40)).await;
+
+        let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
+        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
+        assert_eq!(&sender.unwrap()[..], "client1");
+        assert!(strmid.is_direct());
+
+        let to_send = Bytes::from("ping pong");
+        s12.send(to_send.clone()).await.unwrap();
+        let rec = r12.try_next().await?.unwrap().freeze();
+        s21.send(rec).await.unwrap();
+        let rec = r21.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+
+        client.close_channel("client2".to_string()).await.unwrap();
+        s12.send(to_send.clone()).await.expect_err("closed channel should kill stream");
+        r21.try_next().await.expect_err("close instream should also die");
+
+        // this shouldn't be an error, but it is. I suspect a bug in quinn or rustls
+        //client.new_channel("client2".to_string()).await.unwrap();
+
+        client2.new_channel("client1".to_string()).await.unwrap();
+        client2.close_channel("client1".to_string()).await.unwrap();
+
+        // this also shouldn't be an error
+        //client2.new_channel("client1".to_string()).await.unwrap();
 
         Ok(()) as Result<(), std::io::Error>
     })

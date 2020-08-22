@@ -64,8 +64,9 @@
         - [x] send ichan event to open new stream
         - [x] who owns Endpoint? Clone in ichan? ((( Option<> in Client? )))
         - [x] allow Client to connect even though it is not listening
-        - [ ] allow Client to close a channel to another client
-            - seems like there could be a bug somewhere that close/reopen would trigger, so good as a test case at least
+        - [x] allow Client to close a channel to another client
+            - seems like there is a bug somewhere---possibly in quinn or rustls---that close/reopen triggers
+            - [ ] investigate this bug!
     - [ ] add intf to automagically pick between client-to-client and proxied streams
         - super magical version: automatically initiate a new client channel
         - less magical version: only use client channel if one is already open
