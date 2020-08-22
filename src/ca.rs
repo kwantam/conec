@@ -21,15 +21,15 @@ use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, RcgenError, SanType,
 };
 
-///! Errors during key generation
+/// Errors during key generation
 #[derive(Debug, Error)]
 pub enum CertAuthError {
-    ///! Error during key generation
+    /// Error during key generation
     #[error(display = "Error generating key")]
     KeyGen(#[source] RcgenError),
 }
 
-///! Generate a new CA certificate for use with CONEC
+/// Generate a new CA certificate for use with CONEC
 pub fn generate_ca() -> Result<Certificate, CertAuthError> {
     let mut params = CertificateParams::default();
     params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
@@ -44,7 +44,7 @@ pub fn generate_ca() -> Result<Certificate, CertAuthError> {
     Ok(Certificate::from_params(params)?)
 }
 
-///! Generate a client certificate signed by a given CA
+/// Generate a client certificate signed by a given CA
 pub fn generate_cert(name: String, ca: &Certificate) -> Result<(Vec<u8>, Vec<u8>), CertAuthError> {
     let mut params = CertificateParams::default();
     params.serial_number = Some(thread_rng().gen());

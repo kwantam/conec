@@ -36,80 +36,80 @@ def_cs_future!(
     ClosingChannelError,
     doc = "A channel that is being closed"
 );
-///! Error variant output by [ClosingChannel]
+/// Error variant output by [ClosingChannel]
 #[derive(Debug, Error)]
 pub enum ClosingChannelError {
-    ///! Incoming channels receiver disappeared
+    /// Incoming channels receiver disappeared
     #[error(display = "IncomingChannels receiver is gone")]
     ReceiverClosed,
-    ///! Tried to close a channel that doesn't exist
+    /// Tried to close a channel that doesn't exist
     #[error(display = "Nonexistent channel")]
     Nonexistent,
-    ///! New channel was canceled
+    /// New channel was canceled
     #[error(display = "Canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
-    ///! Error injecting event
+    /// Error injecting event
     #[error(display = "Could not send event")]
     Event,
 }
 
-///! Error variant output by the IncomingChannels driver
+/// Error variant output by the IncomingChannels driver
 #[derive(Debug, Error)]
 pub enum IncomingChannelsError {
-    ///! Incoming channels receiver disappeared
+    /// Incoming channels receiver disappeared
     #[error(display = "IncomingChannels receiver is gone")]
     ReceiverClosed,
-    ///! Transport unexpectedly stopped delivering new channels
+    /// Transport unexpectedly stopped delivering new channels
     #[error(display = "Unexpected end of Incoming stream")]
     EndOfIncomingStream,
-    ///! Client's connection to Coordinator disappeared
+    /// Client's connection to Coordinator disappeared
     #[error(display = "Client is gone")]
     ClientClosed,
-    ///! Error accepting new connection
+    /// Error accepting new connection
     #[error(display = "Connection error: {:?}", _0)]
     Connect(#[source] ConnectionError),
-    ///! Error connecting control channel to new Client
+    /// Error connecting control channel to new Client
     #[error(display = "Error connecting control channel: {:?}", _0)]
     Control(#[source] ConecConnError),
-    ///! Error handing off result to driver
+    /// Error handing off result to driver
     #[error(display = "Error sending to driver: {:?}", _0)]
     Driver(#[source] mpsc::SendError),
 }
 
-///! Error variant when opening a new channel
+/// Error variant when opening a new channel
 #[derive(Debug, Error)]
 pub enum NewChannelError {
-    ///! Could not parse certificate
+    /// Could not parse certificate
     #[error(display = "Parsing certificate: {:?}", _0)]
     CertificateParse(#[source] quinn::ParseError),
-    ///! General certificate error
+    /// General certificate error
     #[error(display = "Certificate: {:?}", _0)]
     CertificateAuthority(#[source] webpki::Error),
-    ///! Certificate doesn't match what Coord told us
+    /// Certificate doesn't match what Coord told us
     #[error(display = "Certificate mismatch")]
     Certificate,
-    ///! Connecting failed
+    /// Connecting failed
     #[error(display = "Connecting to peer: {:?}", _0)]
     Connecting(#[source] ConecConnError),
-    ///! Driver handoff failure before connecting
+    /// Driver handoff failure before connecting
     #[error(display = "Handing off pre-connection")]
     DriverPre,
-    ///! Driver handoff failure after connecting
+    /// Driver handoff failure after connecting
     #[error(display = "Handing off post-connection")]
     DriverPost,
-    ///! New channel was canceled
+    /// New channel was canceled
     #[error(display = "Canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
-    ///! Configuration error
+    /// Configuration error
     #[error(display = "Configuration error: no ichan driver")]
     Config,
-    ///! Coordinator returned error
+    /// Coordinator returned error
     #[error(display = "Coordinator returned error")]
     Coord,
-    ///! Reused channel id
+    /// Reused channel id
     #[error(display = "Reused channel id")]
     ChannelId,
-    ///! Channel already open to this peer
+    /// Channel already open to this peer
     #[error(display = "Duplicate channel peer")]
     Duplicate,
 }

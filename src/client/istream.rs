@@ -19,30 +19,30 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-///! A [Stream] of incoming data streams from Client or Coordinator.
+/// A [Stream] of incoming data streams from Client or Coordinator.
 ///
 /// See [library documentation](../index.html) for a usage example.
 pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
-///! Output by [IncomingStreams]
+/// Output by [IncomingStreams]
 pub type NewInStream = (Option<String>, StreamId, OutStream, InStream);
 
 #[derive(Copy, Clone, Debug)]
-///! Incoming stream-id and whether it's proxied or direct
+/// Incoming stream-id and whether it's proxied or direct
 pub enum StreamId {
-    ///! This stream is proxied
+    /// This stream is proxied
     Proxied(u32),
-    ///! This stream is connected directly to other client
+    /// This stream is connected directly to other client
     Direct(u32),
 }
 
 impl StreamId {
-    ///! This StreamId represents a proxied stream
+    /// This StreamId represents a proxied stream
     pub fn is_proxied(&self) -> bool {
         matches!(self, Self::Proxied(_))
     }
 
-    ///! This StreamId represents a direct stream
+    /// This StreamId represents a direct stream
     pub fn is_direct(&self) -> bool {
         matches!(self, Self::Direct(_))
     }
@@ -57,16 +57,16 @@ impl From<StreamId> for u32 {
     }
 }
 
-///! Error variant output by [IncomingStreamsDriver]
+/// Error variant output by [IncomingStreamsDriver]
 #[derive(Debug, Error)]
 pub enum IncomingStreamsError {
-    ///! Transport unexpectedly stopped delivering new streams
+    /// Transport unexpectedly stopped delivering new streams
     #[error(display = "Unexpected end of Bi stream")]
     EndOfBiStream,
-    ///! Incoming streams receiver disappeared
+    /// Incoming streams receiver disappeared
     #[error(display = "IncomingStreams receiver is gone")]
     ReceiverClosed,
-    ///! Error while accepting new stream from transport
+    /// Error while accepting new stream from transport
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
 }

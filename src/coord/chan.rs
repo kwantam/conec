@@ -27,34 +27,34 @@ use std::task::{Context, Poll, Waker};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-///! Output by [IncomingStreams](super::IncomingStreams)
+/// Output by [IncomingStreams](super::IncomingStreams)
 pub type NewInStream = (String, u32, OutStream, InStream);
 
-///! Coordinator channel driver errors
+/// Coordinator channel driver errors
 #[derive(Debug, Error)]
 pub enum CoordChanError {
-    ///! Peer closed connection
+    /// Peer closed connection
     #[error(display = "Peer closed connection")]
     PeerClosed,
-    ///! Polling the control channel failed
+    /// Polling the control channel failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
-    ///! Writing to the control channel failed
+    /// Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
-    ///! Client sent an unexpected message
+    /// Client sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
-    ///! Writing to master Coord driver failed
+    /// Writing to master Coord driver failed
     #[error(display = "Sending CoordEvent: {:?}", _0)]
     SendCoordEvent(#[source] mpsc::SendError),
-    ///! Transport unexpectedly stopped delivering new streams
+    /// Transport unexpectedly stopped delivering new streams
     #[error(display = "Unexpected end of Bi stream")]
     EndOfBiStream,
-    ///! Error while accepting new stream from transport
+    /// Error while accepting new stream from transport
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
-    ///! Error while opening new transport stream
+    /// Error while opening new transport stream
     #[error(display = "Opening Bi stream: {:?}", _0)]
     OpenBiStream(#[error(no_from, source)] ConnectionError),
 }

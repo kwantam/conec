@@ -567,7 +567,9 @@ fn test_channel_close() {
         assert_eq!(to_send, rec);
 
         client.close_channel("client2".to_string()).await.unwrap();
-        s12.send(to_send.clone()).await.expect_err("closed channel should kill stream");
+        s12.send(to_send.clone())
+            .await
+            .expect_err("closed channel should kill stream");
         r21.try_next().await.expect_err("close instream should also die");
 
         // this shouldn't be an error, but it is. I suspect a bug in quinn or rustls

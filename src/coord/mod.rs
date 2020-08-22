@@ -42,28 +42,28 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio::task::{JoinError, JoinHandle};
 
-///! Coordinator constructor and driver errors
+/// Coordinator constructor and driver errors
 #[derive(Debug, Error)]
 pub enum CoordError {
-    ///! Transport's incoming connections stream ended
+    /// Transport's incoming connections stream ended
     #[error(display = "Unexpected end of Incoming stream")]
     EndOfIncomingStream,
-    ///! Error accepting new connection
+    /// Error accepting new connection
     #[error(display = "Connection error: {:?}", _0)]
     Connect(#[source] ConnectionError),
-    ///! Error connecting control channel to new Client
+    /// Error connecting control channel to new Client
     #[error(display = "Error connecting control channel: {:?}", _0)]
     Control(#[source] ConecConnError),
-    ///! Error setting up certificate chain
+    /// Error setting up certificate chain
     #[error(display = "Certificate: {:?}", _0)]
     CertificateChain(#[source] TLSError),
-    ///! Error binding port for transport
+    /// Error binding port for transport
     #[error(display = "Binding port: {:?}", _0)]
     Bind(#[source] EndpointError),
-    ///! Error from JoinHandle future
+    /// Error from JoinHandle future
     #[error(display = "Join eror: {:?}", _0)]
     Join(#[source] JoinError),
-    ///! Error handing off result to driver
+    /// Error handing off result to driver
     #[error(display = "Error sending to driver: {:?}", _0)]
     Driver(#[source] mpsc::SendError),
 }
@@ -262,12 +262,12 @@ impl Drop for CoordDriver {
     }
 }
 
-///! A [Stream] of incoming data streams from Client or Coordinator.
+/// A [Stream] of incoming data streams from Client or Coordinator.
 ///
 /// See [library documentation](../index.html) for a usage example.
 pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
-///! Main coordinator object
+/// Main coordinator object
 ///
 /// See [library documentation](../index.html) for an example of constructing a Coord.
 pub struct Coord {
@@ -300,7 +300,7 @@ impl Coord {
         Ok(qscb.build())
     }
 
-    ///! Construct a new coordinator and listen for Clients
+    /// Construct a new coordinator and listen for Clients
     pub async fn new(config: CoordConfig) -> Result<(Self, IncomingStreams), CoordError> {
         // build configuration
         let (cert, key) = config.cert_and_key;
@@ -327,26 +327,26 @@ impl Coord {
         ))
     }
 
-    ///! Report number of connected clients
+    /// Report number of connected clients
     pub fn num_clients(&self) -> usize {
         let inner = self.inner.lock().unwrap();
         inner.clients.len()
     }
 
-    ///! Return the local address that Coord is bound to
+    /// Return the local address that Coord is bound to
     pub fn local_addr(&self) -> std::net::SocketAddr {
         // unwrap is safe because Coord always has a bound socket
         self.endpoint.local_addr().unwrap()
     }
 
-    ///! Open a new stream to a Client
+    /// Open a new stream to a Client
     pub fn new_stream(&mut self, to: String) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;
         self.new_stream_with_id(to, ctr)
     }
 
-    ///! Open a new stream to a Client with an explicit stream-id
+    /// Open a new stream to a Client with an explicit stream-id
     ///
     /// The `sid` argument must be different for every call to this function for a given Client.
     /// If mixing calls to this function with calls to [new_stream](Coord::new_stream), avoid using

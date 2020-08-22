@@ -28,10 +28,10 @@ use std::task::{Context, Poll};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-///! Receiving end of a data stream: a [Stream](futures::stream::Stream) of [BytesMut](bytes::BytesMut).
+/// Receiving end of a data stream: a [Stream](futures::stream::Stream) of [BytesMut](bytes::BytesMut).
 pub type InStream = FramedRead<RecvStream, LengthDelimitedCodec>;
 
-///! Sending end of a data stream that accepts [Bytes](bytes::Bytes).
+/// Sending end of a data stream that accepts [Bytes](bytes::Bytes).
 pub type OutStream = FramedWrite<SendStream, LengthDelimitedCodec>;
 
 pub(crate) async fn outstream_init(
@@ -96,34 +96,34 @@ pub(crate) enum StreamTo {
     Coord(u32),
 }
 
-///! Error variant output by [ConnectingOutStream] future
+/// Error variant output by [ConnectingOutStream] future
 #[derive(Debug, Error)]
 pub enum OutStreamError {
-    ///! Error injecting event
+    /// Error injecting event
     #[error(display = "Could not send event")]
     Event,
-    ///! Coordinator sent us an error
+    /// Coordinator sent us an error
     #[error(display = "Coordinator responded with error")]
     Coord,
-    ///! Reused stream id
+    /// Reused stream id
     #[error(display = "Reused stream id")]
     StreamId,
-    ///! Failed to send initial message
+    /// Failed to send initial message
     #[error(display = "Sending initial message: {:?}", _0)]
     InitMsg(#[error(source, no_from)] io::Error),
-    ///! Failed to flush initial message
+    /// Failed to flush initial message
     #[error(display = "Flushing init message: {:?}", _0)]
     Flush(#[error(source, no_from)] io::Error),
-    ///! Failed to open bidirectional channel
+    /// Failed to open bidirectional channel
     #[error(display = "Opening bidirectional channel: {:?}", _0)]
     OpenBi(#[source] ConnectionError),
-    ///! Opening channel was canceled
+    /// Opening channel was canceled
     #[error(display = "Outgoing connection canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
-    ///! OutStream requested for invalid peer name
+    /// OutStream requested for invalid peer name
     #[error(display = "No such peer: {:?}", _0)]
     NoSuchPeer(String),
-    ///! Failed to initialize stream
+    /// Failed to initialize stream
     #[error(display = "Stream initialization: {:?}", _0)]
     InitStream(#[source] io::Error),
 }

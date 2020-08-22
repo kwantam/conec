@@ -166,8 +166,8 @@ mod consts {
     pub(crate) const STRICT_CTRL: bool = true;
 }
 
-///! Re-exports from quinn
+/// Re-exports from quinn
 pub mod quinn {
-    ///! TLS Certificate (used in [ClientConfig](crate::ClientConfig))
+    /// TLS Certificate (used in [ClientConfig](crate::ClientConfig))
     pub use quinn::Certificate;
 }

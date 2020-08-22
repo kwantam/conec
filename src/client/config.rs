@@ -17,7 +17,7 @@ use rcgen::{generate_simple_self_signed, RcgenError};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
-///! Client configuration struct
+/// Client configuration struct
 ///
 /// See [library documentation](index.html) for usage example.
 #[derive(Clone, Debug)]
@@ -35,7 +35,7 @@ pub struct ClientConfig {
     pub(super) keepalive: bool,
 }
 
-///! Error during Client certificate generation
+/// Error during Client certificate generation
 #[derive(Debug, Error)]
 pub enum CertGenError {
     #[error(display = "Generating self-signed cert: {:?}", _0)]
@@ -45,7 +45,7 @@ pub enum CertGenError {
 }
 
 impl ClientConfig {
-    ///! Construct new ClientConfig
+    /// Construct new ClientConfig
     ///
     /// - `id` is the Client's name, which will be used to identify it to other clients.
     /// - `coord` is the hostname of the coordinator. The coordinator's TLS certificate must match this name.
@@ -73,13 +73,13 @@ impl ClientConfig {
         }
     }
 
-    ///! Set the Coordinator's port number to `port`
+    /// Set the Coordinator's port number to `port`
     pub fn set_port(&mut self, port: u16) -> &mut Self {
         self.addr = port.into();
         self
     }
 
-    ///! Set the Coordinator's address to `addr`, disabling name resolution
+    /// Set the Coordinator's address to `addr`, disabling name resolution
     ///
     /// Note that Client will still ensure that Coordinator's TLS certificate
     /// matches the name specified to [ClientConfig::new].
@@ -88,13 +88,13 @@ impl ClientConfig {
         self
     }
 
-    ///! Enable logging key material to the file specified by the environment variable `SSLKEYLOGFILE`.
+    /// Enable logging key material to the file specified by the environment variable `SSLKEYLOGFILE`.
     pub fn enable_keylog(&mut self) -> &mut Self {
         self.keylog = true;
         self
     }
 
-    ///! Add a trusted certificate authority
+    /// Add a trusted certificate authority
     ///
     /// This certificate authority is used to validate the Coordinator's certificate.
     pub fn set_ca(&mut self, ca: Certificate) -> &mut Self {
@@ -102,7 +102,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Add a trusted certificate authority from a file
+    /// Add a trusted certificate authority from a file
     ///
     /// This is a convenience wrapper around [ClientConfig::set_ca].
     /// Both PEM and DER formats are supported.
@@ -110,7 +110,7 @@ impl ClientConfig {
         Ok(self.set_ca(get_cert(cert_path)?))
     }
 
-    ///! Add a trusted certificate authority for checking Client certs
+    /// Add a trusted certificate authority for checking Client certs
     ///
     /// If no trusted CA is provided, self-signed Client certificates are required.
     pub fn set_client_ca(&mut self, ca: Certificate) -> &mut Self {
@@ -118,7 +118,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Add a trusted certificate authority for checking Client certs from a file
+    /// Add a trusted certificate authority for checking Client certs from a file
     ///
     /// This is a convenience wrapper around [ClientConfig::set_client_ca].
     /// Both PEM and DER formats are supported.
@@ -126,7 +126,7 @@ impl ClientConfig {
         Ok(self.set_client_ca(get_cert(cert_path)?))
     }
 
-    ///! Set the Client's source address explicitly
+    /// Set the Client's source address explicitly
     ///
     /// By default, the source address is set to `0.0.0.0:0`. To bind to a host-assigned
     /// IPv6 port instead, one might call
@@ -141,7 +141,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Enable QUIC stateless retry.
+    /// Enable QUIC stateless retry.
     ///
     /// Per QUIC spec, stateless retry defends against client address spoofing.
     /// The downside is that this adds another round-trip to new connections.
@@ -150,7 +150,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Disable Client listening for incoming direct connections
+    /// Disable Client listening for incoming direct connections
     ///
     /// This means that all streams must be proxed through Coordinator
     pub fn disable_listen(&mut self) -> &mut Self {
@@ -158,7 +158,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Disable Client keepalive messages
+    /// Disable Client keepalive messages
     ///
     /// By default, Clients send a short keepalive message every 5 seconds.
     /// This setting disables that.
@@ -170,7 +170,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Set a certificate and key for Client
+    /// Set a certificate and key for Client
     ///
     /// This certificate is used to authenticate to the Coordinator and when accepting
     /// direct connections from other clients.
@@ -190,7 +190,7 @@ impl ClientConfig {
         self
     }
 
-    ///! Set a certificate and key for Client from file
+    /// Set a certificate and key for Client from file
     ///
     /// This is a convenience wrapper around [ClientConfig::set_cert].
     /// Both PEM and DER formats are supported.

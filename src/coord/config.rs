@@ -14,7 +14,7 @@ use quinn::{Certificate, CertificateChain, PrivateKey};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
-///! Coordinator configuration struct
+/// Coordinator configuration struct
 ///
 /// See [library documentation](index.html) for usage example.
 #[derive(Clone, Debug)]
@@ -27,7 +27,7 @@ pub struct CoordConfig {
 }
 
 impl CoordConfig {
-    ///! Construct a new coordinator configuration from files.
+    /// Construct a new coordinator configuration from files.
     ///
     /// This is a conveniece wrapper around [CoordConfig::new].
     /// Both PEM and DER formats are supported.
@@ -36,7 +36,7 @@ impl CoordConfig {
         Ok(Self::new(cert, key))
     }
 
-    ///! Construct a new coordinator configuration using the given CertificateChainand PrivateKey.
+    /// Construct a new coordinator configuration using the given CertificateChainand PrivateKey.
     pub fn new(cert: CertificateChain, key: PrivateKey) -> Self {
         Self {
             laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
@@ -47,13 +47,13 @@ impl CoordConfig {
         }
     }
 
-    ///! Set listen port number to `port`
+    /// Set listen port number to `port`
     pub fn set_port(&mut self, port: u16) -> &mut Self {
         self.laddr.set_port(port);
         self
     }
 
-    ///! Set listen address to `ip`
+    /// Set listen address to `ip`
     ///
     /// By default, the listen address is set to `0.0.0.0:0`. To bind to a host-assigned
     /// IPv6 port instead, one might call
@@ -66,13 +66,13 @@ impl CoordConfig {
         self
     }
 
-    ///! Enable logging key material to the file specified by the environment variable `SSLKEYLOGFILE`.
+    /// Enable logging key material to the file specified by the environment variable `SSLKEYLOGFILE`.
     pub fn enable_keylog(&mut self) -> &mut Self {
         self.keylog = true;
         self
     }
 
-    ///! Enable QUIC stateless retry.
+    /// Enable QUIC stateless retry.
     ///
     /// Per QUIC spec, stateless retry defends against client address spoofing.
     /// The downside is that this adds another round-trip to new connections.
@@ -81,7 +81,7 @@ impl CoordConfig {
         self
     }
 
-    ///! Add a trusted certificate authority for checking Client certificates
+    /// Add a trusted certificate authority for checking Client certificates
     ///
     /// If no trusted CA is provided, self-signed Client certificates are required.
     pub fn set_client_ca(&mut self, ca: Certificate) -> &mut Self {
@@ -89,7 +89,7 @@ impl CoordConfig {
         self
     }
 
-    ///! Add a trusted certificate authority for checking Client certs from a file
+    /// Add a trusted certificate authority for checking Client certs from a file
     ///
     /// This is a convenience wrapper around [CoordConfig::set_client_ca].
     /// Both PEM and DER formats are supported.

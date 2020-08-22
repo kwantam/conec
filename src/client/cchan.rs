@@ -24,31 +24,31 @@ use std::task::{Context, Poll, Waker};
 use tokio::time::{interval, Duration, Interval};
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 
-///! Client-client channel driver errors
+/// Client-client channel driver errors
 #[derive(Debug, Error)]
 pub enum ClientClientChanError {
-    ///! Peer closed connection
+    /// Peer closed connection
     #[error(display = "Peer closed connection")]
     PeerClosed,
-    ///! Polling the control channel failed
+    /// Polling the control channel failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
-    ///! Writing to the control channel failed
+    /// Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
-    ///! Coordinator sent an unexpected message
+    /// Coordinator sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
-    ///! Keepalive timer disappeared unexpectedly
+    /// Keepalive timer disappeared unexpectedly
     #[error(display = "Keepalive timer disappered unexpectedly")]
     KeepaliveTimer,
-    ///! Local receiver closed
+    /// Local receiver closed
     #[error(display = "Local receiver closed")]
     ReceiverClosed,
-    ///! Transport unexpectedly stopped delivering new streams
+    /// Transport unexpectedly stopped delivering new streams
     #[error(display = "Unexpected end of Bi stream")]
     EndOfBiStream,
-    ///! Error while accepting new stream from transport
+    /// Error while accepting new stream from transport
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
 }

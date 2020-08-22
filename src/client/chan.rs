@@ -31,31 +31,31 @@ use tokio::time::{interval, Duration, Interval};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-///! Client channel driver errors
+/// Client channel driver errors
 #[derive(Debug, Error)]
 pub enum ClientChanError {
-    ///! Peer closed connection
+    /// Peer closed connection
     #[error(display = "Peer closed connection")]
     PeerClosed,
-    ///! Polling the control channel failed
+    /// Polling the control channel failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
-    ///! Writing to the control channel failed
+    /// Writing to the control channel failed
     #[error(display = "Control sink: {:?}", _0)]
     Sink(#[error(source, no_from)] util::SinkError),
-    ///! Coordinator sent an unexpected message
+    /// Coordinator sent an unexpected message
     #[error(display = "Unexpected message from coordinator")]
     WrongMessage(ControlMsg),
-    ///! Coordinator sent us a message about a nonexistent stream-id
+    /// Coordinator sent us a message about a nonexistent stream-id
     #[error(display = "Coord response about nonexistent strmid {}", _0)]
     NonexistentStrOrCh(u32),
-    ///! Coordinator sent us a message about a stale stream-id
+    /// Coordinator sent us a message about a stale stream-id
     #[error(display = "Coord response about stale strmid {}", _0)]
     StaleStrOrCh(u32),
-    ///! Another client driver died
+    /// Another client driver died
     #[error(display = "Another client driver died")]
     OtherDriverHup,
-    ///! Keepalive timer disappeared unexpectedly
+    /// Keepalive timer disappeared unexpectedly
     #[error(display = "Keepalive timer disappered unexpectedly")]
     KeepaliveTimer,
 }

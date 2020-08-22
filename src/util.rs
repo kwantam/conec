@@ -61,16 +61,16 @@ pub(crate) fn drive_ctrl_send(
     Ok(cont)
 }
 
-///! Errors when reading in a certificate
+/// Errors when reading in a certificate
 #[derive(Debug, Error)]
 pub enum CertReadError {
-    ///! Failed to read certificate or key file
+    /// Failed to read certificate or key file
     #[error(display = "Reading certificate or key file: {:?}", _0)]
     ReadingCertOrKey(#[source] io::Error),
-    ///! Failed to parse certificate or key
+    /// Failed to parse certificate or key
     #[error(display = "Parsing certificate or key: {:?}", _0)]
     ParsingCertOrKey(#[source] ParseError),
-    ///! Certificate chain is incomplete
+    /// Certificate chain is incomplete
     #[error(display = "Certificate chain is incomplete")]
     CertificateChain,
 }

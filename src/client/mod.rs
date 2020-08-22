@@ -35,37 +35,37 @@ use err_derive::Error;
 use futures::channel::mpsc;
 use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, Endpoint, EndpointError, ParseError};
 
-///! Client::new constructor errors
+/// Client::new constructor errors
 #[derive(Debug, Error)]
 pub enum ClientError {
-    ///! Adding certificate authority failed
+    /// Adding certificate authority failed
     #[error(display = "Adding certificate authority: {:?}", _0)]
     CertificateAuthority(#[source] webpki::Error),
-    ///! Binding port failed
+    /// Binding port failed
     #[error(display = "Binding port: {:?}", _0)]
     Bind(#[source] EndpointError),
-    ///! Connecting to Coordinator failed
+    /// Connecting to Coordinator failed
     #[error(display = "Connecting to coordinator: {:?}", _0)]
     Connect(#[source] ConecConnError),
-    ///! Accepting control stream from Coordinator failed
+    /// Accepting control stream from Coordinator failed
     #[error(display = "Connecting control stream to coordinator: {:?}", _0)]
     Control(#[error(source, no_from)] ConecConnError),
-    ///! Generating certificate for client failed
+    /// Generating certificate for client failed
     #[error(display = "Generating certificate for client: {:?}", _0)]
     CertificateGen(#[source] CertGenError),
-    ///! Error setting up certificate chain
+    /// Error setting up certificate chain
     #[error(display = "Certificate chain: {:?}", _0)]
     CertificateChain(#[source] TLSError),
-    ///! Error parsing client ephemeral cert
+    /// Error parsing client ephemeral cert
     #[error(display = "Ephemeral cert: {:?}", _0)]
     CertificateParse(#[source] ParseError),
-    ///! Error starting new stream
+    /// Error starting new stream
     #[error(display = "Starting new stream: {:?}", _0)]
     NewStream(#[source] ClientChanError),
 }
 
-///! The target of a call to [Client::new_proxied_stream] or [Client::new_direct_stream]:
-///! either the coordinator or another client.
+/// The target of a call to [Client::new_proxied_stream] or [Client::new_direct_stream]:
+/// either the coordinator or another client.
 pub enum StreamPeer {
     /// The other endpoint is the coordinator
     Coord,
@@ -98,7 +98,7 @@ impl From<Option<String>> for StreamPeer {
     }
 }
 
-///! The Client end of a connection to the Coordinator
+/// The Client end of a connection to the Coordinator
 ///
 /// See [library documentation](../index.html) for an example of constructing a Client.
 pub struct Client {
@@ -110,7 +110,7 @@ pub struct Client {
 }
 
 impl Client {
-    ///! Construct a Client and connect to the Coordinator
+    /// Construct a Client and connect to the Coordinator
     pub async fn new(config: ClientConfig) -> Result<(Self, IncomingStreams), ClientError> {
         // generate client certificates
         let config = {
@@ -205,12 +205,12 @@ impl Client {
         ))
     }
 
-    ///! Open a new stream to another client, proxied through the Coordinator
+    /// Open a new stream to another client, proxied through the Coordinator
     pub fn new_proxied_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
         self.new_x_stream(to.into(), StreamId::Proxied)
     }
 
-    ///! Open a new stream to another client directly
+    /// Open a new stream to another client directly
     ///
     /// It is only possible to open another stream to a client for which there is
     /// an open channel, either because that client connected to this one or because
@@ -228,7 +228,7 @@ impl Client {
         self.new_stream_with_id(to, as_id(ctr))
     }
 
-    ///! Open a new proxied stream to another client with an explicit stream-id
+    /// Open a new proxied stream to another client with an explicit stream-id
     ///
     /// The `sid` argument must be different for every call to this function for a given Client object.
     /// If mixing calls to this function with calls to [Client::new_proxied_stream] or
@@ -243,7 +243,7 @@ impl Client {
         }
     }
 
-    ///! Open a new channel directly to another client
+    /// Open a new channel directly to another client
     ///
     /// Note that a client that is not listening for new channels can nevertheless
     /// open a new channel to one that is listening.
@@ -253,14 +253,14 @@ impl Client {
         self.new_channel_with_id(to, ctr)
     }
 
-    ///! Open a new channel directly to another client with an explicit channel-id
+    /// Open a new channel directly to another client with an explicit channel-id
     ///
     /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
     pub fn new_channel_with_id(&self, to: String, cid: u32) -> ConnectingChannel {
         self.coord.new_channel(to, cid)
     }
 
-    ///! Close an open channel
+    /// Close an open channel
     ///
     /// Currently, attempting to open a channel after closing it causes what appears
     /// to be a transport error. XXX(#1)
