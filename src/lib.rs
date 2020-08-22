@@ -16,21 +16,21 @@ Clients are assumed to know (e.g., by configuration or service discovery)
 the hostname and port number of Coordinator. Coordinator is assumed to have
 a TLS certificate for this hostname issued by a CA that Clients trust.
 
-The basic abstraction is a channel, which connects two entities
-(Client or Coordinator). A channel comprises one bi-directional
-control stream and zero or more bidirectional data streams.
-Every Client shares a channel with Coordinator: at startup, Client
-connects to Coordinator.
+The basic abstraction is a channel, which connects two entities (Client
+or Coordinator). Every Client shares a channel with Coordinator: at
+startup, Client connects to Coordinator. Clients can also ask Coordinator
+to help them open a channel directly to another Client. There is currently
+no explicit support for NAT traversal, but because of the way connections
+are done Clients behind certain NATs (in particular, "full-cone NATs")
+should be able to make direct connections. A future version will add
+support for explicit NAT holepunching.
 
+A channel comprises one bi-directional control stream, which is used
+internally to manage the channel, and zero or more bidirectional data streams.
 A data stream accepts a sequence of messages from its writer. The data
 stream's reader receives these messages in order. The stream handles
 all message framing: a read yields a full message or nothing. There
 is no support for out-of-order reads; use multiple data streams instead.
-
-In this version of conec, the only supported data streams are
-*proxied streams*: Client sends data to Coordinator, who forwards to
-another Client. (In a future version, Coordinator will assist Clients
-in constructing Client-to-Client channels, including NAT traversal.)
 
 # Quickstart
 
