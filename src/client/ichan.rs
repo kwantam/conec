@@ -8,6 +8,7 @@
 // except according to those terms.
 
 use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
+use super::chan::ConnectingChannelHandle;
 use super::NewInStream;
 use super::StreamPeer;
 use crate::consts::MAX_LOOPS;
@@ -67,8 +68,8 @@ pub enum NewChannelError {
     #[error(display = "Handing off pre-connection")]
     DriverPre,
     ///! Driver handoff failure after connecting
-    #[error(display = "Handing off post-connection: {:?}", _0)]
-    DriverPost(#[source] mpsc::SendError),
+    #[error(display = "Handing off post-connection")]
+    DriverPost,
     ///! New channel was canceled
     #[error(display = "Canceled: {:?}", _0)]
     Canceled(#[source] oneshot::Canceled),
@@ -81,21 +82,29 @@ pub enum NewChannelError {
     ///! Reused channel id
     #[error(display = "Reused channel id")]
     ChannelId,
+    ///! Channel already open to this peer
+    #[error(display = "Duplicate channel peer")]
+    Duplicate,
 }
 
-#[allow(clippy::large_enum_variant)]
 pub(super) enum IncomingChannelsEvent {
     Certificate(String, Vec<u8>),
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
-    Connected(ConecConn, CtrlStream, IncomingBiStreams, String),
-    ChanClose(String),
-    NewChannel(
+    Connected(
+        ConecConn,
+        CtrlStream,
+        IncomingBiStreams,
         String,
-        SocketAddr,
-        Vec<u8>,
-        oneshot::Sender<Result<(), NewChannelError>>,
+        ConnectingChannelHandle,
     ),
+    ChanClose(String),
+    NewChannel(String, SocketAddr, Vec<u8>, ConnectingChannelHandle),
     NewStream(String, u32, ConnectingOutStreamHandle),
+}
+
+enum ChanHandle {
+    Connecting(Vec<IncomingChannelsEvent>),
+    Connected(ClientClientChan),
 }
 
 pub(super) struct IncomingChannelsInner {
@@ -106,7 +115,7 @@ pub(super) struct IncomingChannelsInner {
     ref_count: usize,
     driver: Option<Waker>,
     certs: HashMap<String, Vec<u8>>,
-    chans: HashMap<String, ClientClientChan>,
+    chans: HashMap<String, ChanHandle>,
     strm_out: mpsc::UnboundedSender<NewInStream>,
     sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
     events: mpsc::UnboundedReceiver<IncomingChannelsEvent>,
@@ -167,8 +176,8 @@ impl IncomingChannelsInner {
                 }
                 Accepted(conn, ctrl, ibi, peer) => {
                     // check that cert client gave us is consistent with what Coord told us
-                    match self.certs.get(&peer) {
-                        Some(cert) if &cert[..] == conn.get_cert_bytes() => {
+                    match (self.chans.get(&peer).is_some(), self.certs.get(&peer)) {
+                        (false, Some(cert)) if &cert[..] == conn.get_cert_bytes() => {
                             let inner = ClientClientChanRef::new(
                                 conn,
                                 ctrl,
@@ -180,14 +189,17 @@ impl IncomingChannelsInner {
                             );
                             let driver = ClientClientChanDriver::new(inner.clone(), self.keepalive);
                             tokio::spawn(async move { driver.await });
-                            self.chans.insert(peer, ClientClientChan(inner));
+                            self.chans.insert(peer, ChanHandle::Connected(ClientClientChan(inner)));
                         }
-                        _ => {
+                        (dup, _) => {
                             tokio::spawn(async move {
                                 let mut ctrl = ctrl;
-                                ctrl.send(ControlMsg::HelloError("cert mismatch".to_string()))
-                                    .await
-                                    .ok();
+                                let errmsg = if dup {
+                                    ControlMsg::HelloError("duplicate client".to_string())
+                                } else {
+                                    ControlMsg::HelloError("cert mismatch".to_string())
+                                };
+                                ctrl.send(errmsg).await.ok();
                                 ctrl.finish().await.ok();
                                 drop(ctrl);
                                 drop(conn);
@@ -195,7 +207,7 @@ impl IncomingChannelsInner {
                         }
                     }
                 }
-                Connected(conn, ctrl, ibi, peer) => {
+                Connected(conn, ctrl, ibi, peer, handle) => {
                     let inner = ClientClientChanRef::new(
                         conn,
                         ctrl,
@@ -207,12 +219,40 @@ impl IncomingChannelsInner {
                     );
                     let driver = ClientClientChanDriver::new(inner.clone(), self.keepalive);
                     tokio::spawn(async move { driver.await });
-                    self.chans.insert(peer, ClientClientChan(inner));
+                    handle.send(Ok(())).ok();
+
+                    // save off channel and process any waiting events
+                    use ChanHandle::*;
+                    match self.chans.insert(peer, ChanHandle::Connected(ClientClientChan(inner))) {
+                        None => unreachable!("lost Connecting(..) struct"),
+                        Some(Connected(_)) => unreachable!("got Connecting(..) after already connected"),
+                        Some(Connecting(mut events)) => {
+                            for event in events.drain(..) {
+                                self.sender
+                                    .unbounded_send(event)
+                                    .map_err(|e| {
+                                        if let NewStream(_, _, handle) = e.into_inner() {
+                                            handle.send(Err(OutStreamError::Event)).ok();
+                                        } else {
+                                            unreachable!()
+                                        }
+                                    })
+                                    .ok();
+                            }
+                        }
+                    }
                 }
                 ChanClose(peer) => {
                     self.chans.remove(&peer);
                 }
-                NewChannel(peer, addr, cert, res_out) => {
+                NewChannel(peer, _, _, handle) if self.chans.get(&peer).is_some() => {
+                    handle.send(Err(NewChannelError::Duplicate)).ok();
+                }
+                NewChannel(peer, addr, cert, handle) => {
+                    // record this connection as in-progress
+                    self.chans.insert(peer.clone(), ChanHandle::Connecting(Vec::new()));
+
+                    // now actually connect
                     let mut endpoint = self.endpoint.clone();
                     let mut cfg = self.client_config.clone();
                     let trusted_cert = match self.client_ca.clone() {
@@ -222,37 +262,59 @@ impl IncomingChannelsInner {
                     let id = self.id.clone();
                     let sender = self.sender.clone();
                     tokio::spawn(async move {
-                        res_out
-                            .send(
-                                async move {
-                                    // set up new config and connect
-                                    cfg.add_certificate_authority(trusted_cert?)?;
-                                    let (mut conn, ibi) =
-                                        ConecConn::connect(&mut endpoint, &peer, addr.into(), Some(cfg)).await?;
+                        let epeer = peer.clone();
+                        match async move {
+                            // set up new config and connect
+                            cfg.add_certificate_authority(trusted_cert?)?;
+                            let (mut conn, ibi) =
+                                ConecConn::connect(&mut endpoint, &peer, addr.into(), Some(cfg)).await?;
 
-                                    // check certificate
-                                    conn.read_cert_bytes();
-                                    if conn.get_cert_bytes() != &cert[..] {
-                                        return Err(NewChannelError::Certificate);
-                                    }
+                            // connect control stream and check certs
+                            let mut ctrl = conn.connect_ctrl(id).await?;
+                            conn.read_cert_bytes();
+                            if conn.get_cert_bytes() != &cert[..] {
+                                ctrl.send(ControlMsg::HelloError("cert mismatch".to_string()))
+                                    .await
+                                    .ok();
+                                ctrl.finish().await.ok();
+                                return Err(NewChannelError::Certificate);
+                            }
 
-                                    // connect control stream and return to driver
-                                    let ctrl = conn.connect_ctrl(id).await?;
-                                    sender
-                                        .unbounded_send(Connected(conn, ctrl, ibi, peer))
-                                        .map_err(|e| e.into_send_error().into())
-                                }
-                                .await,
-                            )
-                            .ok()
+                            Ok((conn, ctrl, ibi))
+                        }
+                        .await
+                        {
+                            Err(e) => {
+                                sender.unbounded_send(ChanClose(epeer)).ok();
+                                handle.send(Err(e)).ok();
+                            }
+                            Ok((conn, ctrl, ibi)) => {
+                                sender
+                                    .unbounded_send(Connected(conn, ctrl, ibi, epeer, handle))
+                                    .map_err(|e| {
+                                        if let Connected(_, _, _, _, handle) = e.into_inner() {
+                                            handle.send(Err(NewChannelError::DriverPost)).ok();
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    })
+                                    .ok();
+                            }
+                        };
                     });
                 }
                 NewStream(peer, sid, handle) => {
-                    if let Some(chan) = self.chans.get(&peer) {
-                        chan.new_stream(sid, handle);
-                    } else {
-                        handle.send(Err(OutStreamError::NoSuchPeer(peer))).ok();
-                    }
+                    match self.chans.get_mut(&peer) {
+                        Some(ChanHandle::Connected(chan)) => {
+                            chan.new_stream(sid, handle);
+                        }
+                        Some(ChanHandle::Connecting(queue)) => {
+                            queue.push(NewStream(peer, sid, handle));
+                        }
+                        _ => {
+                            handle.send(Err(OutStreamError::NoSuchPeer(peer))).ok();
+                        }
+                    };
                 }
             };
             recvd += 1;

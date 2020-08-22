@@ -62,7 +62,7 @@ pub enum ClientChanError {
 
 ///! A direct channel to a Client that is currently connecting
 pub struct ConnectingChannel(oneshot::Receiver<Result<(), NewChannelError>>);
-type ConnectingChannelHandle = oneshot::Sender<Result<(), NewChannelError>>;
+pub(crate) type ConnectingChannelHandle = oneshot::Sender<Result<(), NewChannelError>>;
 impl Future for ConnectingChannel {
     type Output = Result<(), NewChannelError>;
 

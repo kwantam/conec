@@ -111,7 +111,7 @@ impl ClientClientChanInner {
                 Poll::Ready(None) => Err(ClientClientChanError::PeerClosed),
                 Poll::Ready(Some(Err(e))) => Err(ClientClientChanError::StreamPoll(e)),
                 Poll::Ready(Some(Ok(msg))) => match msg {
-                    ControlMsg::KeepAlive => Ok(()),
+                    ControlMsg::KeepAlive | ControlMsg::CoHello => Ok(()),
                     _ => {
                         let err = ClientClientChanError::WrongMessage(msg);
                         if STRICT_CTRL {

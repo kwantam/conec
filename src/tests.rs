@@ -44,7 +44,6 @@ fn test_simple() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(20)).await;
         assert_eq!(coord.num_clients(), 1);
         drop(client);
         time::delay_for(Duration::from_millis(20)).await;
@@ -75,7 +74,6 @@ fn test_repeat_name() {
         };
         let client = Client::new(client_cfg.clone()).await.unwrap();
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
         // start another client with the same name --- should fail
@@ -87,7 +85,6 @@ fn test_repeat_name() {
 
         // start another client with the old name --- should generate no error
         let client = Client::new(client_cfg).await.unwrap();
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
         drop(client);
         time::delay_for(Duration::from_millis(20)).await;
@@ -125,7 +122,6 @@ fn test_stream_uni() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 2);
 
         // open stream to client2
@@ -178,7 +174,6 @@ fn test_stream_bi() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 2);
 
         // open stream to client2
@@ -233,7 +228,6 @@ fn test_stream_bi_multi() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 2);
 
         let mut streams = Vec::new();
@@ -278,7 +272,6 @@ fn test_stream_loopback() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
         // open stream to client
@@ -325,7 +318,6 @@ fn test_stream_client_to_coord() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
         // open stream to client
@@ -380,7 +372,6 @@ fn test_stream_coord_to_client() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
         // open stream to client
@@ -414,7 +405,7 @@ fn test_stream_coord_to_client() {
 }
 
 #[test]
-fn test_channel_loopback() {
+fn test_channel_loopback_error() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -435,11 +426,19 @@ fn test_channel_loopback() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
-        client.new_channel("client1".to_string()).await.unwrap();
-
+        // open stream to Coord --- should work
+        client.new_direct_stream(None).await.unwrap();
+        client
+            .new_direct_stream("client1".to_string())
+            .await
+            .map(|_| ())
+            .expect_err("should not be able to start direct stream until we have connected");
+        client
+            .new_channel("client1".to_string())
+            .await
+            .expect_err("should not be able to connect to self");
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -468,17 +467,38 @@ fn test_channel_simple() {
         };
 
         // start client 2
-        let (_client2, _inc2) = {
+        let (_client2, mut inc2) = {
             let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
             client_cfg.set_ca_from_file(&cpath).unwrap();
             client_cfg.set_port(port);
             Client::new(client_cfg.clone()).await.unwrap()
         };
-
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 2);
 
+        client
+            .new_direct_stream("client2".to_string())
+            .await
+            .map(|_| ())
+            .expect_err("should have needed to connect first");
         client.new_channel("client2".to_string()).await.unwrap();
+        time::delay_for(Duration::from_millis(40)).await;
+        client
+            .new_channel("client2".to_string())
+            .await
+            .expect_err("duplicate channel should be rejected");
+        time::delay_for(Duration::from_millis(40)).await;
+
+        let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
+        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
+        assert_eq!(&sender.unwrap()[..], "client1");
+        assert!(strmid.is_direct());
+
+        let to_send = Bytes::from("ping pong");
+        s12.send(to_send.clone()).await.unwrap();
+        let rec = r12.try_next().await?.unwrap().freeze();
+        s21.send(rec).await.unwrap();
+        let rec = r21.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -522,7 +542,6 @@ fn test_client_cert() {
             Client::new(client_cfg).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 1);
 
         // start client with wrong name in cert
@@ -546,7 +565,6 @@ fn test_client_cert() {
             Client::new(client_cfg).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 2);
 
         Ok(()) as Result<(), std::io::Error>
@@ -582,7 +600,6 @@ fn test_reject_client_cert() {
             .map(|_| ())
             .expect_err("client should have failed to connect");
 
-        time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_clients(), 0);
 
         Ok(()) as Result<(), std::io::Error>
@@ -613,7 +630,6 @@ fn test_keepalive() {
             Client::new(client_cfg.clone()).await.unwrap()
         };
 
-        time::delay_for(Duration::from_millis(11_000)).await;
         assert_eq!(coord.num_clients(), 1);
 
         Ok(()) as Result<(), std::io::Error>
