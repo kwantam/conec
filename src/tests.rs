@@ -547,12 +547,10 @@ fn test_channel_close() {
             .map(|_| ())
             .expect_err("should have needed to connect first");
         client.new_channel("client2".to_string()).await.unwrap();
-        time::delay_for(Duration::from_millis(40)).await;
         client
             .new_channel("client2".to_string())
             .await
             .expect_err("duplicate channel should be rejected");
-        time::delay_for(Duration::from_millis(40)).await;
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
         let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
@@ -693,7 +691,6 @@ fn test_client_cert() {
                 .expect_err("should have failed to connect with mismatched name");
         };
 
-        // start client with wrong name in cert
         let (_client2, _inc2) = {
             let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
             client_cfg.set_ca_from_file(&cpath).unwrap();
@@ -703,6 +700,118 @@ fn test_client_cert() {
         };
 
         assert_eq!(coord.num_clients(), 2);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_client_cert_channel() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+
+    // generate CA and client certificates
+    let cacert = generate_ca().unwrap();
+    let cacert_bytes = cacert.serialize_der().unwrap();
+    let (cert1_bytes, key1_bytes) = generate_cert("client1".to_string(), &cacert).unwrap();
+    let (cert2_bytes, key2_bytes) = generate_cert("client2".to_string(), &cacert).unwrap();
+    let (cert3_bytes, key3_bytes) = generate_cert("client3".to_string(), &cacert).unwrap();
+    let cacert = Certificate::from_der(cacert_bytes.as_ref()).unwrap();
+    let c1cert = CertificateChain::from_certs(Certificate::from_der(cert1_bytes.as_ref()));
+    let c1key = PrivateKey::from_der(key1_bytes.as_ref()).unwrap();
+    let c2cert = CertificateChain::from_certs(Certificate::from_der(cert2_bytes.as_ref()));
+    let c2key = PrivateKey::from_der(key2_bytes.as_ref()).unwrap();
+    let c2key2 = PrivateKey::from_der(key2_bytes.as_ref()).unwrap();
+    let c3cert = CertificateChain::from_certs(Certificate::from_der(cert3_bytes.as_ref()));
+    let c3key = PrivateKey::from_der(key3_bytes.as_ref()).unwrap();
+
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            coord_cfg.set_client_ca(cacert.clone());
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client, _inc) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c1cert, c1key, key1_bytes);
+            client_cfg.set_client_ca(cacert.clone());
+            Client::new(client_cfg).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 1);
+
+        // start client with wrong name in cert
+        {
+            let mut client_cfg = ClientConfig::new("client3".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c2cert.clone(), c2key, key2_bytes.clone());
+            Client::new(client_cfg)
+                .await
+                .map(|_| ())
+                .expect_err("should have failed to connect with mismatched name");
+        };
+
+        let (_client2, mut inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c2cert, c2key2, key2_bytes);
+            client_cfg.set_client_ca(cacert.clone());
+            Client::new(client_cfg).await.unwrap()
+        };
+        assert_eq!(coord.num_clients(), 2);
+
+        // client with wrong ca cert --- connections to and from this client should fail
+        let (mut client3, _inc3) = {
+            let mut client_cfg = ClientConfig::new("client3".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.set_cert(c3cert, c3key, key3_bytes);
+            Client::new(client_cfg).await.unwrap()
+        };
+
+        client
+            .new_direct_stream("client2".to_string())
+            .await
+            .map(|_| ())
+            .expect_err("should have needed to connect first");
+        client.new_channel("client2".to_string()).await.unwrap();
+        client
+            .new_channel("client2".to_string())
+            .await
+            .expect_err("duplicate channel should be rejected");
+
+        let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
+        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
+        assert_eq!(&sender.unwrap()[..], "client1");
+        assert!(strmid.is_direct());
+
+        let to_send = Bytes::from("ping pong");
+        s12.send(to_send.clone()).await.unwrap();
+        let rec = r12.try_next().await?.unwrap().freeze();
+        s21.send(rec).await.unwrap();
+        let rec = r21.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+
+        client.close_channel("client2".to_string()).await.unwrap();
+        s12.send(to_send.clone())
+            .await
+            .expect_err("closed channel should kill stream");
+        r21.try_next().await.expect_err("close instream should also die");
+
+        // check that client3 connections fail in both directions
+        client.new_channel("client3".to_string()).await.expect_err("bad ca cert, conneciton should have failed");
+        client3.new_channel("client2".to_string()).await.expect_err("bad ca cert, connection should have failed");
 
         Ok(()) as Result<(), std::io::Error>
     })
