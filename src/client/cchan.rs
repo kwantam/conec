@@ -218,7 +218,7 @@ impl Drop for ClientClientChanDriver {
 pub(super) struct ClientClientChan(pub(super) ClientClientChanRef);
 
 impl ClientClientChan {
-    // XXX sid should also be unique w.r.t. proxied streams!!!
+    // XXX should sid also be unique w.r.t. proxied streams?
     //     maybe: push uniqueness check up into Client?
     pub(super) fn new_stream(&self, sid: u32, handle: ConnectingOutStreamHandle) {
         let mut inner = self.0.lock().unwrap();
