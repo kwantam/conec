@@ -102,8 +102,6 @@ impl From<Option<String>> for StreamPeer {
 /// See [library documentation](../index.html) for an example of constructing a Client.
 pub struct Client {
     #[allow(dead_code)]
-    endpoint: Option<Endpoint>,
-    #[allow(dead_code)]
     in_streams: IncomingStreamsRef,
     in_channels: IncomingChannels,
     coord: ClientChan,
@@ -165,7 +163,7 @@ impl Client {
         let (stream_sender, incoming_streams) = mpsc::unbounded();
 
         // incoming channels listener
-        let (in_channels, ichan_sender, endpoint) = if config.listen {
+        let (in_channels, ichan_sender) = {
             let (inner, sender) = IncomingChannelsRef::new(
                 endpoint,
                 config.id,
@@ -177,16 +175,16 @@ impl Client {
             );
             let driver = IncomingChannelsDriver(inner.clone());
             tokio::spawn(async move { driver.await });
-            (IncomingChannels::new(inner, sender.clone()), Some(sender), None)
-        } else {
-            (IncomingChannels::default(), None, Some(endpoint))
+            (IncomingChannels::new(inner, sender.clone()), sender)
         };
 
         // client-coordinator channel
-        let coord = ClientChanRef::new(conn, ctrl, ichan_sender);
-        let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
-        tokio::spawn(async move { driver.await });
-        let coord = ClientChan(coord);
+        let coord = {
+            let coord = ClientChanRef::new(conn, ctrl, ichan_sender, config.listen);
+            let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
+            tokio::spawn(async move { driver.await });
+            ClientChan(coord)
+        };
 
         // set up the incoming streams listener
         let in_streams = IncomingStreamsRef::new(ibi, stream_sender);
@@ -197,7 +195,6 @@ impl Client {
 
         Ok((
             Self {
-                endpoint,
                 in_streams,
                 in_channels,
                 coord,
@@ -217,9 +214,6 @@ impl Client {
     /// It is only possible to open another stream to a client for which there is
     /// an open channel, either because that client connected to this one or because
     /// this client called [Client::new_channel].
-    ///
-    /// Opening will fail if Clients are not configured to accept incoming
-    /// connections (note that *both* clients must be configured in this way!).
     pub fn new_direct_stream<T: Into<StreamPeer>>(&mut self, to: T) -> ConnectingOutStream {
         self.new_x_stream(to.into(), StreamId::Direct)
     }
@@ -249,6 +243,9 @@ impl Client {
     }
 
     ///! Open a new channel directly to another client
+    ///
+    /// Note that a client that is not listening for new channels can nevertheless
+    /// open a new channel to one that is listening.
     pub fn new_channel(&mut self, to: String) -> ConnectingChannel {
         let ctr = self.ctr;
         self.ctr += 1;

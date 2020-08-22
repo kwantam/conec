@@ -507,6 +507,62 @@ fn test_channel_simple() {
 }
 
 #[test]
+fn test_channel_oneway() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client, mut inc) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.disable_listen();
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (mut client2, _inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+        assert_eq!(coord.num_clients(), 2);
+
+        client2
+            .new_channel("client1".to_string())
+            .await
+            .expect_err("client2 should not be able to connect, client1 is not listening");
+        client.new_channel("client2".to_string()).await.unwrap();
+
+        // once client1 connects, client2 can initiate a stream
+        let (mut s12, mut r21) = client2.new_direct_stream("client1".to_string()).await.unwrap();
+        let (sender, strmid, mut s21, mut r12) = inc.next().await.unwrap();
+        assert_eq!(&sender.unwrap()[..], "client2");
+        assert!(strmid.is_direct());
+
+        let to_send = Bytes::from("ping pong");
+        s12.send(to_send.clone()).await.unwrap();
+        let rec = r12.try_next().await?.unwrap().freeze();
+        s21.send(rec).await.unwrap();
+        let rec = r21.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
 fn test_client_cert() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();

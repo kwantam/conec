@@ -85,7 +85,8 @@ pub(super) struct ClientChanInner {
     new_channels: HashMap<u32, Option<(String, ConnectingChannelHandle)>>,
     flushing: bool,
     keepalive: Option<Interval>,
-    ichan_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+    ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
+    listen: bool,
 }
 
 impl ClientChanInner {
@@ -168,20 +169,16 @@ impl ClientChanInner {
                 }
                 ControlMsg::NewChannelOk(sid, addr, cert) => {
                     let (peer, chan) = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
-                    if let Some(ref sender) = self.ichan_sender {
-                        sender
-                            .unbounded_send(IncomingChannelsEvent::NewChannel(peer, addr, cert, chan))
-                            .map_err(|e| {
-                                if let IncomingChannelsEvent::NewChannel(_, _, _, chan) = e.into_inner() {
-                                    chan.send(Err(NewChannelError::DriverPre)).ok();
-                                } else {
-                                    unreachable!();
-                                }
-                            })
-                            .ok();
-                    } else {
-                        chan.send(Err(NewChannelError::Config)).ok();
-                    }
+                    self.ichan_sender
+                        .unbounded_send(IncomingChannelsEvent::NewChannel(peer, addr, cert, chan))
+                        .map_err(|e| {
+                            if let IncomingChannelsEvent::NewChannel(_, _, _, chan) = e.into_inner() {
+                                chan.send(Err(NewChannelError::DriverPre)).ok();
+                            } else {
+                                unreachable!();
+                            }
+                        })
+                        .ok();
                     Ok(())
                 }
                 ControlMsg::NewChannelErr(sid) => {
@@ -190,9 +187,9 @@ impl ClientChanInner {
                     Ok(())
                 }
                 ControlMsg::CertReq(peer, sid, cert) => {
-                    if let Some(ref sender) = self.ichan_sender {
+                    if self.listen {
                         self.to_send.push_back(ControlMsg::CertOk(peer.clone(), sid));
-                        sender
+                        self.ichan_sender
                             .unbounded_send(IncomingChannelsEvent::Certificate(peer, cert))
                             .or(Err(ClientChanError::OtherDriverHup))
                     } else {
@@ -244,7 +241,8 @@ impl ClientChanRef {
     pub(super) fn new(
         conn: ConecConn,
         ctrl: CtrlStream,
-        ichan_sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+        ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
+        listen: bool,
     ) -> Self {
         Self(Arc::new(Mutex::new(ClientChanInner {
             conn,
@@ -257,6 +255,7 @@ impl ClientChanRef {
             flushing: false,
             keepalive: None,
             ichan_sender,
+            listen,
         })))
     }
 }
@@ -282,9 +281,7 @@ impl Drop for ClientChanDriver {
         inner.new_streams.clear();
         inner.new_channels.clear();
         inner.keepalive.take();
-        if let Some(s) = inner.ichan_sender.take() {
-            s.close_channel();
-        }
+        inner.ichan_sender.close_channel();
     }
 }
 

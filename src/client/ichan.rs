@@ -380,35 +380,25 @@ impl Drop for IncomingChannelsDriver {
 }
 
 pub(super) struct IncomingChannels {
-    inner: Option<IncomingChannelsRef>,
-    sender: Option<mpsc::UnboundedSender<IncomingChannelsEvent>>,
+    #[allow(dead_code)]
+    inner: IncomingChannelsRef,
+    sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
 }
 
 impl IncomingChannels {
     pub(super) fn new(inner: IncomingChannelsRef, sender: mpsc::UnboundedSender<IncomingChannelsEvent>) -> Self {
-        Self {
-            inner: Some(inner),
-            sender: Some(sender),
-        }
-    }
-
-    fn is_some(&self) -> bool {
-        self.inner.is_some() && self.sender.is_some()
+        Self { inner, sender }
     }
 
     pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
         let (sender, receiver) = oneshot::channel();
-        if !self.is_some() {
-            sender.send(Err(OutStreamError::BadConfig)).ok();
-        } else if to.is_coord() {
+        if to.is_coord() {
             sender
                 .send(Err(OutStreamError::NoSuchPeer("<Direct-to-Coord>".to_string())))
                 .ok();
         } else {
             use IncomingChannelsEvent::NewStream;
             self.sender
-                .as_ref()
-                .unwrap()
                 .unbounded_send(NewStream(to.into_id().unwrap(), sid, sender))
                 .map_err(|e| {
                     if let NewStream(_, _, sender) = e.into_inner() {
@@ -421,14 +411,5 @@ impl IncomingChannels {
         }
 
         ConnectingOutStream(receiver)
-    }
-}
-
-impl Default for IncomingChannels {
-    fn default() -> Self {
-        IncomingChannels {
-            inner: None,
-            sender: None,
-        }
     }
 }
