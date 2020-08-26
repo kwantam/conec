@@ -10,7 +10,9 @@
 use super::ichan::IncomingChannelsEvent;
 use super::istream::{IncomingStreamsInner, NewInStream, StreamId};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
-use crate::types::{outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError};
+use crate::types::{
+    outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError, StreamPeer,
+};
 use crate::util;
 
 use err_derive::Error;
@@ -235,7 +237,7 @@ impl ClientClientChan {
                     .send(
                         bi.err_into::<OutStreamError>()
                             .and_then(|(send, recv)| async {
-                                outstream_init(send, Some(id), sid)
+                                outstream_init(send, StreamPeer::Client(id), sid)
                                     .await
                                     .map(|send| (send, FramedRead::new(recv, LengthDelimitedCodec::new())))
                             })

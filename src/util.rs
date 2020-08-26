@@ -133,10 +133,10 @@ macro_rules! def_ref {
                 let mut inner = self.lock().unwrap();
                 if let Some(x) = inner.ref_count.checked_sub(1) {
                     inner.ref_count = x;
-                    if x == 0 {
-                        if let Some(task) = inner.driver.take() {
-                            task.wake();
-                        }
+                }
+                if inner.ref_count == 0 {
+                    if let Some(task) = inner.driver.take() {
+                        task.wake();
                     }
                 }
             }

@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use crate::consts::MAX_LOOPS;
-use crate::types::{InStream, OutStream};
+use crate::types::{InStream, OutStream, StreamPeer};
 
 use err_derive::Error;
 use futures::{channel::mpsc, prelude::*};
@@ -25,7 +25,12 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
 /// Output by [IncomingStreams]
-pub type NewInStream = (Option<String>, StreamId, OutStream, InStream);
+pub enum NewInStream {
+    /// A stream connected to the Coordinator
+    Coord(u32, OutStream, InStream),
+    /// A stream connected to another Client
+    Client(String, StreamId, OutStream, InStream),
+}
 
 #[derive(Copy, Clone, Debug)]
 /// Incoming stream-id and whether it's proxied or direct
@@ -45,6 +50,14 @@ impl StreamId {
     /// This StreamId represents a direct stream
     pub fn is_direct(&self) -> bool {
         matches!(self, Self::Direct(_))
+    }
+
+    /// Extract the enclosed id number
+    pub fn as_u32(&self) -> u32 {
+        match self {
+            Self::Proxied(sid) => *sid,
+            Self::Direct(sid) => *sid,
+        }
     }
 }
 
@@ -90,7 +103,7 @@ impl IncomingStreamsInner {
         tokio::spawn(async move {
             let mut read_stream = SymmetricallyFramed::new(
                 FramedRead::new(recv, LengthDelimitedCodec::new()),
-                SymmetricalBincode::<(Option<String>, u32)>::default(),
+                SymmetricalBincode::<(StreamPeer, u32)>::default(),
             );
             let (peer, chanid) = match read_stream.try_next().await {
                 Err(e) => {
@@ -105,7 +118,14 @@ impl IncomingStreamsInner {
             };
             let instream = read_stream.into_inner();
             let outstream = FramedWrite::new(send, LengthDelimitedCodec::new());
-            sender.unbounded_send((peer, strmid(chanid), outstream, instream)).ok();
+            match peer {
+                StreamPeer::Coord => sender.unbounded_send(NewInStream::Coord(chanid, outstream, instream)),
+                StreamPeer::Client(peer) => {
+                    sender.unbounded_send(NewInStream::Client(peer, strmid(chanid), outstream, instream))
+                }
+                StreamPeer::Broadcast(_) => unreachable!("broadcast streams are never incoming"),
+            }
+            .ok();
         });
     }
 

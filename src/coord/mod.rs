@@ -13,6 +13,7 @@ This module defines the Coordinator entity and associated functionality.
 See [library documentation](../index.html) for more info on how to instantiate a Coordinator.
 */
 
+mod bchan;
 mod chan;
 pub(crate) mod config;
 mod tls;
@@ -22,6 +23,7 @@ use crate::types::{
     ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
     OutStreamError,
 };
+use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanRef, BroadcastNew};
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
 pub use chan::{CoordChanError, NewInStream};
 use config::CoordConfig;
@@ -71,17 +73,21 @@ pub enum CoordError {
 enum CoordEvent {
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
     ChanClose(String),
+    BroadcastClose(String),
     NewCoStream(String, u32, ConnectingOutStreamHandle),
     NewStreamReq(String, String, u32),
     NewStreamRes(String, u32, Result<(SendStream, RecvStream), ConnectionError>),
     NewChannelReq(String, String, u32, Vec<u8>),
     NewChannelRes(String, u32, SocketAddr, Vec<u8>),
     NewChannelErr(String, u32),
+    NewBroadcastReq(String, String, u32),
+    NewBroadcastRes(String, u32, BroadcastNew),
 }
 
 struct CoordInner {
     incoming: Incoming,
     clients: HashMap<String, CoordChan>,
+    broadcasts: HashMap<String, BroadcastChan>,
     driver: Option<Waker>,
     ref_count: usize,
     sender: mpsc::UnboundedSender<CoordEvent>,
@@ -159,8 +165,10 @@ impl CoordInner {
                     }
                 }
                 ChanClose(client) => {
-                    // client channel closed --- drop it from the queue
                     self.clients.remove(&client);
+                }
+                BroadcastClose(chan) => {
+                    self.broadcasts.remove(&chan);
                 }
                 NewStreamReq(from, to, sid) => {
                     if let Some(c_to) = self.clients.get(&to) {
@@ -208,6 +216,33 @@ impl CoordInner {
                         tracing::warn!("NCErr client disappeared: {}:{}", to, sid);
                     }
                 }
+                NewBroadcastReq(from, chan, sid) => {
+                    let res = if let Some(c_chan) = self.broadcasts.get(&chan) {
+                        c_chan.new_broadcast(from.clone(), sid)
+                    } else {
+                        let (inner, sender) = BroadcastChanRef::new(chan.clone(), self.sender.clone());
+                        let driver = BroadcastChanDriver(inner.clone());
+                        tokio::spawn(async move { driver.await });
+                        let bchan = BroadcastChan { inner, sender };
+                        let res = bchan.new_broadcast(from.clone(), sid);
+                        self.broadcasts.insert(chan, bchan);
+                        res
+                    };
+                    if res.is_none() {
+                        if let Some(c_to) = self.clients.get(&from) {
+                            c_to.send(CoordChanEvent::NBErr(sid));
+                        } else {
+                            tracing::warn!("NBErr client disappeared: {}:{}", from, sid);
+                        }
+                    }
+                }
+                NewBroadcastRes(to, sid, res) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::NBRes(sid, res));
+                    } else {
+                        tracing::warn!("NBRes client disappeared: {}:{}", to, sid);
+                    }
+                }
             };
             accepted += 1;
             if accepted >= MAX_LOOPS {
@@ -238,6 +273,7 @@ impl CoordRef {
             Self(Arc::new(Mutex::new(CoordInner {
                 incoming,
                 clients: HashMap::new(),
+                broadcasts: HashMap::new(),
                 driver: None,
                 ref_count: 0,
                 sender: sender.clone(),

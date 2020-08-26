@@ -10,11 +10,10 @@
 use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
 use super::chan::ConnectingChannelHandle;
 use super::NewInStream;
-use super::StreamPeer;
 use crate::consts::MAX_LOOPS;
 use crate::types::{
     ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
-    OutStreamError,
+    OutStreamError, StreamPeer,
 };
 
 use err_derive::Error;

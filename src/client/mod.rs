@@ -21,13 +21,14 @@ mod istream;
 mod tls;
 
 use crate::consts::ALPN_CONEC;
+pub use crate::types::StreamPeer;
 use crate::types::{ConecConn, ConecConnError, ConnectingOutStream};
 use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
-use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use ichan::{ClosingChannel, IncomingChannelsError, NewChannelError};
+use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream, StreamId};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
@@ -62,41 +63,6 @@ pub enum ClientError {
     /// Error starting new stream
     #[error(display = "Starting new stream: {:?}", _0)]
     NewStream(#[source] ClientChanError),
-}
-
-/// The target of a call to [Client::new_proxied_stream] or [Client::new_direct_stream].
-pub enum StreamPeer {
-    /// The other endpoint is the coordinator
-    Coord,
-    /// The other endpoint is a client
-    Client(String),
-}
-
-impl StreamPeer {
-    /// Returns true just when this value represents the Coordinator
-    pub fn is_coord(&self) -> bool {
-        matches!(self, Self::Coord)
-    }
-
-    /// Converts StreamPeer into Option<String>, where None is Coordinator
-    pub fn into_id(self) -> Option<String> {
-        match self {
-            Self::Coord => None,
-            Self::Client(id) => Some(id),
-        }
-    }
-}
-
-impl From<String> for StreamPeer {
-    fn from(s: String) -> Self {
-        Self::Client(s)
-    }
-}
-
-impl From<Option<String>> for StreamPeer {
-    fn from(s: Option<String>) -> Self {
-        s.map_or(Self::Coord, Self::Client)
-    }
 }
 
 /// The Client end of a connection to the Coordinator

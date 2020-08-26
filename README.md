@@ -67,6 +67,7 @@
         - [x] allow Client to close a channel to another client
             - seems like there is a bug somewhere---possibly in quinn or rustls---that close/reopen triggers
             - [ ] investigate this bug!
+    - [ ] broadcast channels
     - [ ] add intf to automagically pick between client-to-client and proxied streams
         - super magical version: automatically initiate a new client channel
         - less magical version: only use client channel if one is already open

@@ -9,7 +9,7 @@
 
 use crate::{
     ca::{generate_ca, generate_cert},
-    client::StreamId,
+    client::{NewInStream, StreamId},
     Client, ClientConfig, Coord, CoordConfig,
 };
 
@@ -127,7 +127,10 @@ fn test_stream_uni() {
         // open stream to client2
         let (mut s12, _r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
         // receive stream at client2
-        let (_sender, _strmid, _s21, mut r12) = inc2.next().await.unwrap();
+        let mut r12 = match inc2.next().await.unwrap() {
+            NewInStream::Client(_, _, _, r12) => r12,
+            NewInStream::Coord(..) => unreachable!(),
+        };
 
         let to_send = Bytes::from("test stream");
         s12.send(to_send.clone()).await.unwrap();
@@ -179,7 +182,10 @@ fn test_stream_bi() {
         // open stream to client2
         let (mut s12, mut r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
         // receive stream at client2
-        let (_sender, _strmid, mut s21, mut r12) = inc2.next().await.unwrap();
+        let (mut s21, mut r12) = match inc2.next().await.unwrap() {
+            NewInStream::Client(_, _, s21, r12) => (s21, r12),
+            NewInStream::Coord(..) => unreachable!(),
+        };
 
         let to_send = Bytes::from("ping pong");
         s12.send(to_send.clone()).await.unwrap();
@@ -234,8 +240,11 @@ fn test_stream_bi_multi() {
         #[allow(clippy::same_item_push)] // suppress false positive
         for _ in 0..4usize {
             let (s12, r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
-            let (sender, _strmid, s21, r12) = inc2.next().await.unwrap();
-            assert_eq!(sender, Some("client1".to_string()));
+            let (sender, s21, r12) = match inc2.next().await.unwrap() {
+                NewInStream::Client(sender, _, s21, r12) => (sender, s21, r12),
+                NewInStream::Coord(..) => unreachable!(),
+            };
+            assert_eq!(sender, "client1".to_string());
             streams.push((s12, r21, s21, r12));
         }
         let to_send = Bytes::from("ping pong");
@@ -278,7 +287,10 @@ fn test_stream_loopback() {
         // open stream to client
         let (mut s11, mut r11x) = client.new_proxied_stream("client1".to_string()).await.unwrap();
         // receive stream at client
-        let (_sender, _strmid, mut s11x, mut r11) = inc.next().await.unwrap();
+        let (mut s11x, mut r11) = match inc.next().await.unwrap() {
+            NewInStream::Client(_, _, s11x, r11) => (s11x, r11),
+            NewInStream::Coord(..) => unreachable!(),
+        };
 
         let to_send = Bytes::from("loopback stream");
         s11.send(to_send.clone()).await.unwrap();
@@ -377,8 +389,11 @@ fn test_stream_coord_to_client() {
 
         // open stream to client
         let (mut s11, mut r11x) = coord.new_stream("client1".to_string()).await.unwrap();
-        // receive stream at coordinator
-        let (sender, _strmid, mut s11x, mut r11) = inc.next().await.unwrap();
+        // receive stream at client
+        let (mut s11x, mut r11) = match inc.next().await.unwrap() {
+            NewInStream::Client(..) => unreachable!(),
+            NewInStream::Coord(_, s11x, r11) => (s11x, r11),
+        };
 
         let to_send = Bytes::from("loopback stream");
         s11.send(to_send.clone()).await.unwrap();
@@ -386,7 +401,6 @@ fn test_stream_coord_to_client() {
         s11x.send(rec).await.unwrap();
         let rec = r11x.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
-        assert!(sender.is_none());
 
         // should error if we try to reuse a sid, even with a different target
         assert!(coord
@@ -494,8 +508,11 @@ fn test_channel_simple() {
         time::delay_for(Duration::from_millis(40)).await;
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
-        assert_eq!(&sender.unwrap()[..], "client1");
+        let (sender, strmid, mut s21, mut r12) = match inc2.next().await.unwrap() {
+            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
+            NewInStream::Coord(..) => unreachable!(),
+        };
+        assert_eq!(&sender, "client1");
         assert!(strmid.is_direct());
 
         let to_send = Bytes::from("ping pong");
@@ -553,8 +570,11 @@ fn test_channel_close() {
             .expect_err("duplicate channel should be rejected");
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
-        assert_eq!(&sender.unwrap()[..], "client1");
+        let (sender, strmid, mut s21, mut r12) = match inc2.next().await.unwrap() {
+            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
+            NewInStream::Coord(..) => unreachable!(),
+        };
+        assert_eq!(&sender, "client1");
         assert!(strmid.is_direct());
 
         let to_send = Bytes::from("ping pong");
@@ -624,8 +644,11 @@ fn test_channel_oneway() {
 
         // once client1 connects, client2 can initiate a stream
         let (mut s12, mut r21) = client2.new_direct_stream("client1".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = inc.next().await.unwrap();
-        assert_eq!(&sender.unwrap()[..], "client2");
+        let (sender, strmid, mut s21, mut r12) = match inc.next().await.unwrap() {
+            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
+            NewInStream::Coord(..) => unreachable!(),
+        };
+        assert_eq!(&sender, "client2");
         assert!(strmid.is_direct());
 
         let to_send = Bytes::from("ping pong");
@@ -792,8 +815,11 @@ fn test_client_cert_channel() {
             .expect_err("duplicate channel should be rejected");
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
-        assert_eq!(&sender.unwrap()[..], "client1");
+        let (sender, strmid, mut s21, mut r12) = match inc2.next().await.unwrap() {
+            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
+            NewInStream::Coord(..) => unreachable!(),
+        };
+        assert_eq!(&sender, "client1");
         assert!(strmid.is_direct());
 
         let to_send = Bytes::from("ping pong");
@@ -810,8 +836,14 @@ fn test_client_cert_channel() {
         r21.try_next().await.expect_err("close instream should also die");
 
         // check that client3 connections fail in both directions
-        client.new_channel("client3".to_string()).await.expect_err("bad ca cert, conneciton should have failed");
-        client3.new_channel("client2".to_string()).await.expect_err("bad ca cert, connection should have failed");
+        client
+            .new_channel("client3".to_string())
+            .await
+            .expect_err("bad ca cert, conneciton should have failed");
+        client3
+            .new_channel("client2".to_string())
+            .await
+            .expect_err("bad ca cert, connection should have failed");
 
         Ok(()) as Result<(), std::io::Error>
     })

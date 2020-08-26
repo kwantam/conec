@@ -7,13 +7,11 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::{
-    ichan::{IncomingChannelsEvent, NewChannelError},
-    StreamPeer,
-};
+use super::ichan::{IncomingChannelsEvent, NewChannelError};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError, StreamTo,
+    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError, StreamPeer,
+    StreamTo,
 };
 use crate::util;
 

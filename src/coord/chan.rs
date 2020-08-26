@@ -7,11 +7,12 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use super::bchan::{BroadcastChanError, BroadcastForward, BroadcastNew};
 use super::CoordEvent;
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
     outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream, OutStream,
-    OutStreamError, StreamTo,
+    OutStreamError, StreamPeer, StreamTo,
 };
 use crate::util;
 
@@ -72,6 +73,7 @@ pub(super) struct CoordChanInner {
     to_send: VecDeque<ControlMsg>,
     flushing: bool,
     new_streams: HashMap<u32, (SendStream, RecvStream)>,
+    new_broadcasts: HashMap<u32, BroadcastNew>,
     is_sender: mpsc::UnboundedSender<NewInStream>,
     sids: HashSet<u32>,
 }
@@ -84,6 +86,8 @@ pub(super) enum CoordChanEvent {
     NCErr(u32),
     NCReq(String, u32, Vec<u8>),
     NCRes(u32, SocketAddr, Vec<u8>),
+    NBRes(u32, BroadcastNew),
+    NBErr(u32),
     BiIn(StreamTo, OutStream, InStream),
     BiOut(u32, ConnectingOutStreamHandle),
 }
@@ -123,6 +127,10 @@ impl CoordChanInner {
                 ControlMsg::CertNok(to, sid) => self
                     .coord
                     .unbounded_send(CoordEvent::NewChannelErr(to, sid))
+                    .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
+                ControlMsg::NewBroadcastReq(chan, sid) => self
+                    .coord
+                    .unbounded_send(CoordEvent::NewBroadcastReq(self.peer.clone(), chan, sid))
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
                 ControlMsg::KeepAlive => {
                     self.to_send.push_back(ControlMsg::KeepAlive);
@@ -182,15 +190,33 @@ impl CoordChanInner {
                 NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
                 NCReq(to, sid, cert) => self.to_send.push_back(ControlMsg::CertReq(to, sid, cert)),
                 NCRes(sid, addr, cert) => self.to_send.push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
+                NBRes(sid, res) => {
+                    self.to_send.push_back(ControlMsg::NewBroadcastOk(sid));
+                    self.new_broadcasts.insert(sid, res);
+                }
+                NBErr(sid) => {
+                    self.to_send.push_back(ControlMsg::NewBroadcastErr(sid));
+                }
                 BiIn(sid, n_send, n_recv) => match sid {
+                    StreamTo::Broadcast(sid) => match self
+                        .new_broadcasts
+                        .remove(&sid)
+                        .ok_or(BroadcastChanError::Empty)
+                        .and_then(|res| BroadcastForward::new(n_send, n_recv, res))
+                    {
+                        Err(_) => self.to_send.push_back(ControlMsg::NewBroadcastErr(sid)),
+                        Ok(bf) => {
+                            tokio::spawn(async move { bf.await });
+                        }
+                    },
                     StreamTo::Client(sid) => {
                         if let Some((send, recv)) = self.new_streams.remove(&sid) {
                             let from = self.peer.clone();
                             tokio::spawn(async move {
-                                let send = match outstream_init(send, Some(from), sid).await {
+                                let send = match outstream_init(send, StreamPeer::Client(from), sid).await {
                                     Ok(send) => send,
                                     Err(e) => {
-                                        tracing::warn!("CoordChan::handle_events: BiIn: {:?}", e);
+                                        tracing::warn!("CoordChan::handle_events: BiIn: Client: {:?}", e);
                                         return;
                                     }
                                 };
@@ -224,7 +250,7 @@ impl CoordChanInner {
                                 .send(
                                     bi.err_into::<OutStreamError>()
                                         .and_then(|(send, recv)| async {
-                                            outstream_init(send, None, sid).await.map(|send| {
+                                            outstream_init(send, StreamPeer::Coord, sid).await.map(|send| {
                                                 (send, FramedRead::new(recv, LengthDelimitedCodec::new()))
                                             })
                                         })
@@ -324,6 +350,7 @@ impl CoordChanRef {
                 to_send,
                 flushing: false,
                 new_streams: HashMap::new(),
+                new_broadcasts: HashMap::new(),
                 is_sender,
                 sids: HashSet::new(),
             }))),

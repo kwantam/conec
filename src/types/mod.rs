@@ -36,12 +36,12 @@ pub type OutStream = FramedWrite<SendStream, LengthDelimitedCodec>;
 
 pub(crate) async fn outstream_init(
     send: SendStream,
-    peer: Option<String>,
+    peer: StreamPeer,
     sid: u32,
 ) -> Result<OutStream, OutStreamError> {
     let mut write_stream = SymmetricallyFramed::new(
         FramedWrite::new(send, LengthDelimitedCodec::new()),
-        SymmetricalBincode::<(Option<String>, u32)>::default(),
+        SymmetricalBincode::<(StreamPeer, u32)>::default(),
     );
     // send (from, sid) and flush
     write_stream.send((peer, sid)).await?;
@@ -92,6 +92,7 @@ impl ConecConnAddr {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) enum StreamTo {
+    Broadcast(u32),
     Client(u32),
     Coord(u32),
 }
@@ -137,3 +138,52 @@ def_cs_future!(
     OutStreamError,
     doc = "An outgoing stream that is connecting"
 );
+
+/// The other end of this stream: Coordinator, another Client, or a Broadcast channel
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum StreamPeer {
+    /// The other endpoint is the coordinator
+    Coord,
+    /// The other endpoint is a client
+    Client(String),
+    /// The other endpoint is a broadcast stream
+    Broadcast(String),
+}
+
+impl From<String> for StreamPeer {
+    fn from(s: String) -> Self {
+        Self::Client(s)
+    }
+}
+
+impl From<Option<String>> for StreamPeer {
+    fn from(s: Option<String>) -> Self {
+        s.map_or(Self::Coord, Self::Client)
+    }
+}
+
+impl StreamPeer {
+    /// Returns true just when this value represents the Coordinator
+    pub fn is_coord(&self) -> bool {
+        matches!(self, Self::Coord)
+    }
+
+    /// Returns true just when this value represents a Client
+    pub fn is_client(&self) -> bool {
+        matches!(self, Self::Client(_))
+    }
+
+    /// Returns true just when this value represents a Broadcast stream
+    pub fn is_broadcast(&self) -> bool {
+        matches!(self, Self::Broadcast(_))
+    }
+
+    /// Converts StreamPeer into Option<String>, where None is Coordinator
+    pub fn into_id(self) -> Option<String> {
+        match self {
+            Self::Coord => None,
+            Self::Client(id) => Some(id),
+            Self::Broadcast(id) => Some(id),
+        }
+    }
+}

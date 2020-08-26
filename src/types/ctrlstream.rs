@@ -37,6 +37,9 @@ pub enum ControlMsg {
     CertReq(String, u32, Vec<u8>),
     CertNok(String, u32),
     CertOk(String, u32),
+    NewBroadcastReq(String, u32),
+    NewBroadcastErr(u32),
+    NewBroadcastOk(u32),
 }
 
 #[derive(Debug, Error)]
