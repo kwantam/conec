@@ -140,6 +140,7 @@ impl ClientChanInner {
     }
 
     fn drive_ctrl_recv(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
+        use ControlMsg::*;
         let mut recvd = 0;
         loop {
             let msg = match self.ctrl.poll_next_unpin(cx) {
@@ -149,18 +150,17 @@ impl ClientChanInner {
                 Poll::Ready(Some(Ok(msg))) => Ok(msg),
             }?;
             match msg {
-                ControlMsg::NewStreamOk(sid) => {
+                NewStreamOk(sid) | NewBroadcastOk(sid) => {
                     let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
-                    let sid = StreamTo::Client(sid);
+                    let sid = if let NewStreamOk(_) = msg {
+                        StreamTo::Client(sid)
+                    } else {
+                        StreamTo::Broadcast(sid)
+                    };
                     self.new_stream(chan, sid);
                     Ok(())
                 }
-                ControlMsg::NewStreamErr(sid) => {
-                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
-                    chan.send(Err(OutStreamError::Coord)).ok();
-                    Ok(())
-                }
-                ControlMsg::NewChannelOk(sid, addr, cert) => {
+                NewChannelOk(sid, addr, cert) => {
                     let (peer, chan) = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
                     self.ichan_sender
                         .unbounded_send(IncomingChannelsEvent::NewChannel(peer, addr, cert, chan))
@@ -174,23 +174,28 @@ impl ClientChanInner {
                         .ok();
                     Ok(())
                 }
-                ControlMsg::NewChannelErr(sid) => {
+                NewStreamErr(sid) | NewBroadcastErr(sid) => {
+                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
+                    chan.send(Err(OutStreamError::Coord)).ok();
+                    Ok(())
+                }
+                NewChannelErr(sid) => {
                     let (_, chan) = Self::get_new_str_or_ch(sid, &mut self.new_channels)?;
                     chan.send(Err(NewChannelError::Coord)).ok();
                     Ok(())
                 }
-                ControlMsg::CertReq(peer, sid, cert) => {
+                CertReq(peer, sid, cert) => {
                     if self.listen {
-                        self.to_send.push_back(ControlMsg::CertOk(peer.clone(), sid));
+                        self.to_send.push_back(CertOk(peer.clone(), sid));
                         self.ichan_sender
                             .unbounded_send(IncomingChannelsEvent::Certificate(peer, cert))
                             .or(Err(ClientChanError::OtherDriverHup))
                     } else {
-                        self.to_send.push_back(ControlMsg::CertNok(peer, sid));
+                        self.to_send.push_back(CertNok(peer, sid));
                         Ok(())
                     }
                 }
-                ControlMsg::KeepAlive => Ok(()),
+                KeepAlive => Ok(()),
                 _ => {
                     let err = ClientChanError::WrongMessage(msg);
                     if STRICT_CTRL {
@@ -322,5 +327,21 @@ impl ClientChan {
         }
 
         ConnectingChannel(receiver)
+    }
+
+    pub(super) fn new_broadcast(&self, chan: String, sid: u32) -> ConnectingOutStream {
+        let (sender, receiver) = oneshot::channel();
+        let mut inner = self.0.lock().unwrap();
+
+        // make sure this stream hasn't already been used
+        if inner.new_streams.get(&sid).is_some() {
+            sender.send(Err(OutStreamError::StreamId)).ok();
+        } else {
+            inner.to_send.push_back(ControlMsg::NewBroadcastReq(chan, sid));
+            inner.new_streams.insert(sid, Some(sender));
+            inner.wake();
+        }
+
+        ConnectingOutStream(receiver)
     }
 }

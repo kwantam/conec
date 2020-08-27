@@ -229,9 +229,26 @@ impl Client {
 
     /// Close an open channel
     ///
-    /// Currently, attempting to open a channel after closing it causes what appears
+    /// Currently, attempting to re-open a channel after closing causes what appears
     /// to be a transport error. XXX(#1)
     pub fn close_channel(&self, peer: String) -> ClosingChannel {
         self.in_channels.close_channel(peer)
+    }
+
+    /// Open or connect to a broadcast stream
+    ///
+    /// A broadcast channel is a many-to-many stream proxied through the Coordinator.
+    /// Any Client who knows the stream's name can send to and receive from it.
+    pub fn new_broadcast(&mut self, chan: String) -> ConnectingOutStream {
+        let ctr = self.ctr;
+        self.ctr += 1;
+        self.new_broadcast_with_id(chan, ctr)
+    }
+
+    /// Open or connect to a broadcast stream with an explicit stream-id
+    ///
+    /// The `sid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
+    pub fn new_broadcast_with_id(&self, chan: String, sid: u32) -> ConnectingOutStream {
+        self.coord.new_broadcast(chan, sid)
     }
 }
