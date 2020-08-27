@@ -13,7 +13,7 @@ use crate::types::{InStream, OutStream};
 
 use bytes::Bytes;
 use err_derive::Error;
-use futures::{channel::mpsc, prelude::*};
+use futures::{channel::mpsc, prelude::*, stream::futures_unordered::FuturesUnordered};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -222,5 +222,78 @@ impl Future for BroadcastForward {
                 (Ok(v1), Ok(v2)) => Poll::Ready(v1.and(v2)),
             },
         }
+    }
+}
+
+/* *************************************************************************** */
+
+struct BcastSendWritable(Option<mpsc::Sender<Bytes>>);
+impl Future for BcastSendWritable {
+    type Output = Result<mpsc::Sender<Bytes>, <mpsc::Sender<Bytes> as Sink<Bytes>>::Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        if self.0.is_none() {
+            panic!("awaited future twice");
+        }
+
+        match self.0.as_mut().unwrap().poll_ready_unpin(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(self.0.take().unwrap())),
+        }
+    }
+}
+
+struct BcastFanout {
+    recv: mpsc::Receiver<Bytes>,                        // should be bounded to 32ish
+    ready: Vec<mpsc::Sender<Bytes>>,                    // should be bounded to 1
+    waiting: FuturesUnordered<BcastSendWritable>,
+    buf: Option<Bytes>,
+    driver: Option<Waker>,
+    flushing: bool,
+}
+
+impl BcastFanout {
+    fn new(recv: mpsc::Receiver<Bytes>, send: mpsc::Sender<Bytes>) -> Self {
+        let ready = vec!(send);
+        Self {
+            recv,
+            ready,
+            waiting: FuturesUnordered::new(),
+            buf: None,
+            driver: None,
+            flushing: false,
+        }
+    }
+
+    fn push(&mut self, it: mpsc::Sender<Bytes>) {
+        self.waiting.push(BcastSendWritable(Some(it)));
+        if let Some(task) = self.driver.take() {
+            task.wake();
+        }
+    }
+}
+
+impl Future for BcastFanout {
+    type Output = Result<(), BroadcastChanError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match &self.driver {
+            Some(w) if w.will_wake(cx.waker()) => (),
+            _ => self.driver = Some(cx.waker().clone()),
+        };
+
+        loop {
+            if self.buf.is_some() {
+                // check whether we can write; if not, just break
+                // otherwise, write the value
+            }
+
+            // now need to flush
+
+            // now need to check for next incoming value on recv
+        }
+
+        Poll::Pending
     }
 }
