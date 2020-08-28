@@ -489,15 +489,33 @@ fn test_broadcast_bidi() {
 
         // open broadcast streams
         let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s2, _r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
-        let rec = r1.try_next().await?.unwrap().freeze();
-        assert_eq!(to_send, rec);
-        s2.send(rec).await.unwrap();
-        let rec = r1.try_next().await?.unwrap().freeze();
-        assert_eq!(to_send, rec);
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec2 = r2.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+        assert_eq!(to_send, rec2);
+        s2.send(rec1).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec2 = r2.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+        assert_eq!(to_send, rec2);
+
+        assert_eq!(coord.num_broadcasts(), 1);
+
+        drop(r2);
+        drop(s2);
+        assert_eq!(coord.num_broadcasts(), 1);
+        s1.send(to_send.clone()).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+
+        drop(r1);
+        drop(s1);
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_broadcasts(), 0);
 
         Ok(()) as Result<(), std::io::Error>
     })

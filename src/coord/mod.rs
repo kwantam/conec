@@ -20,10 +20,10 @@ mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{
-    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
-    OutStreamError,
+    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream,
+    OutStream, OutStreamError,
 };
-use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanRef, BroadcastNew};
+use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanRef};
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
 pub use chan::{CoordChanError, NewInStream};
 use config::CoordConfig;
@@ -80,8 +80,7 @@ enum CoordEvent {
     NewChannelReq(String, String, u32, Vec<u8>),
     NewChannelRes(String, u32, SocketAddr, Vec<u8>),
     NewChannelErr(String, u32),
-    NewBroadcastReq(String, String, u32),
-    NewBroadcastRes(String, u32, BroadcastNew),
+    NewBroadcastReq(String, OutStream, InStream),
 }
 
 struct CoordInner {
@@ -216,32 +215,16 @@ impl CoordInner {
                         tracing::warn!("NCErr client disappeared: {}:{}", to, sid);
                     }
                 }
-                NewBroadcastReq(from, chan, sid) => {
-                    let res = if let Some(c_chan) = self.broadcasts.get(&chan) {
-                        c_chan.new_broadcast(from.clone(), sid)
+                NewBroadcastReq(chan, send, recv) => {
+                    if let Some(c_chan) = self.broadcasts.get(&chan) {
+                        c_chan.new_broadcast(send, recv);
                     } else {
-                        let (inner, sender) = BroadcastChanRef::new(chan.clone(), self.sender.clone());
+                        let (inner, sender) = BroadcastChanRef::new(chan.clone(), self.sender.clone(), send, recv);
                         let driver = BroadcastChanDriver(inner.clone());
                         tokio::spawn(async move { driver.await });
                         let bchan = BroadcastChan { inner, sender };
-                        let res = bchan.new_broadcast(from.clone(), sid);
                         self.broadcasts.insert(chan, bchan);
-                        res
                     };
-                    if res.is_none() {
-                        if let Some(c_to) = self.clients.get(&from) {
-                            c_to.send(CoordChanEvent::NBErr(sid));
-                        } else {
-                            tracing::warn!("NBErr client disappeared: {}:{}", from, sid);
-                        }
-                    }
-                }
-                NewBroadcastRes(to, sid, res) => {
-                    if let Some(c_to) = self.clients.get(&to) {
-                        c_to.send(CoordChanEvent::NBRes(sid, res));
-                    } else {
-                        tracing::warn!("NBRes client disappeared: {}:{}", to, sid);
-                    }
                 }
             };
             accepted += 1;
@@ -367,6 +350,12 @@ impl Coord {
     pub fn num_clients(&self) -> usize {
         let inner = self.inner.lock().unwrap();
         inner.clients.len()
+    }
+
+    /// Report number of active broadcast channels
+    pub fn num_broadcasts(&self) -> usize {
+        let inner = self.inner.lock().unwrap();
+        inner.broadcasts.len()
     }
 
     /// Return the local address that Coord is bound to

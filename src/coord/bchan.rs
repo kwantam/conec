@@ -8,16 +8,19 @@
 // except according to those terms.
 
 use super::CoordEvent;
-use crate::consts::{BCAST_QUEUE, MAX_LOOPS};
+use crate::consts::MAX_LOOPS;
 use crate::types::{InStream, OutStream};
 
 use bytes::Bytes;
 use err_derive::Error;
-use futures::{channel::mpsc, prelude::*, stream::futures_unordered::FuturesUnordered};
+use futures::{
+    channel::mpsc,
+    prelude::*,
+    stream::{self, futures_unordered::FuturesUnordered},
+};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use tokio::task::{JoinError, JoinHandle};
 
 #[derive(Debug, Error)]
 pub(super) enum BroadcastChanError {
@@ -25,10 +28,6 @@ pub(super) enum BroadcastChanError {
     Coord(#[source] mpsc::SendError),
     #[error(display = "No one receiving")]
     NoReceivers,
-    #[error(display = "forwarding failed")]
-    Forward(#[source] JoinError),
-    #[error(display = "BroadcastForward on empty BroadcastNew")]
-    Empty,
     #[error(display = "error receiving from client")]
     ClientRecv(#[source] std::io::Error),
     #[error(display = "error sending to broadcast")]
@@ -37,55 +36,28 @@ pub(super) enum BroadcastChanError {
     BcastRecv(#[source] async_channel::RecvError),
 }
 
-pub(super) enum BroadcastChanEvent {
-    RecvClose,
-    RecvOpen(String, u32),
-}
+pub(super) type BroadcastChanEvent = (OutStream, InStream);
 
 pub(super) struct BroadcastChanInner {
     chan: String,
     coord: mpsc::UnboundedSender<CoordEvent>,
     sender: mpsc::UnboundedSender<BroadcastChanEvent>,
     events: mpsc::UnboundedReceiver<BroadcastChanEvent>,
-    send: BcastSend,
-    recv: BcastRecv,
+    fanout: BcastFanout,
     driver: Option<Waker>,
     ref_count: usize,
-    recv_count: usize,
 }
-
-pub(super) type BcastSend = async_channel::Sender<Bytes>;
-pub(super) type BcastRecv = async_channel::Receiver<Bytes>;
 
 impl BroadcastChanInner {
     fn handle_events(&mut self, cx: &mut Context) -> Result<bool, BroadcastChanError> {
-        use BroadcastChanEvent::*;
         let mut accepted = 0;
         loop {
-            let event = match self.events.poll_next_unpin(cx) {
+            let (send, recv) = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => unreachable!("BroadcastChanInner owns a sender; something is wrong"),
                 Poll::Ready(Some(event)) => event,
             };
-            match event {
-                RecvClose => {
-                    if let Some(x) = self.recv_count.checked_sub(1) {
-                        self.recv_count = x;
-                    }
-                    if self.recv_count == 0 {
-                        Err(BroadcastChanError::NoReceivers)
-                    } else {
-                        Ok(())
-                    }
-                }
-                RecvOpen(from, sid) => {
-                    let res = BroadcastNew(Some((self.sender.clone(), self.send.clone(), self.recv.clone())));
-                    self.recv_count += 1;
-                    self.coord
-                        .unbounded_send(CoordEvent::NewBroadcastRes(from, sid, res))
-                        .map_err(|e| e.into_send_error().into())
-                }
-            }?;
+            self.fanout.push(send, recv);
             accepted += 1;
             if accepted >= MAX_LOOPS {
                 return Ok(true);
@@ -94,9 +66,19 @@ impl BroadcastChanInner {
         Ok(false)
     }
 
+    fn drive_fanout(&mut self, cx: &mut Context) -> Result<(), BroadcastChanError> {
+        match self.fanout.poll_unpin(cx) {
+            Poll::Pending => Ok(()),
+            Poll::Ready(e @ Err(_)) => e,
+            Poll::Ready(Ok(())) => Err(BroadcastChanError::NoReceivers),
+        }
+    }
+
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), BroadcastChanError> {
         loop {
-            if !self.handle_events(cx)? {
+            let keep_going = self.handle_events(cx)?;
+            self.drive_fanout(cx)?;
+            if !keep_going {
                 return Ok(());
             }
         }
@@ -108,20 +90,20 @@ impl BroadcastChanRef {
     pub(super) fn new(
         chan: String,
         coord: mpsc::UnboundedSender<CoordEvent>,
+        send: OutStream,
+        recv: InStream,
     ) -> (Self, mpsc::UnboundedSender<BroadcastChanEvent>) {
-        let (send, recv) = async_channel::bounded(BCAST_QUEUE);
         let (sender, events) = mpsc::unbounded();
+        let fanout = BcastFanout::new(send, recv);
         (
             Self(Arc::new(Mutex::new(BroadcastChanInner {
                 chan,
                 coord,
                 sender: sender.clone(),
                 events,
-                send,
-                recv,
+                fanout,
                 driver: None,
                 ref_count: 0,
-                recv_count: 0,
             }))),
             sender,
         )
@@ -142,8 +124,6 @@ impl Drop for BroadcastChanDriver {
         inner.coord.disconnect();
         inner.sender.close_channel();
         inner.events.close();
-        inner.send.close();
-        inner.recv.close();
     }
 }
 
@@ -154,123 +134,95 @@ pub(super) struct BroadcastChan {
 }
 
 impl BroadcastChan {
-    pub(super) fn new_broadcast(&self, to: String, sid: u32) -> Option<()> {
-        self.sender.unbounded_send(BroadcastChanEvent::RecvOpen(to, sid)).ok()
+    pub(super) fn new_broadcast(&self, send: OutStream, recv: InStream) {
+        self.sender.unbounded_send((send, recv)).ok();
     }
 }
 
-pub(super) struct BroadcastNew(Option<(mpsc::UnboundedSender<BroadcastChanEvent>, BcastSend, BcastRecv)>);
-
-impl Drop for BroadcastNew {
-    fn drop(&mut self) {
-        if let Some((sender, _, _)) = self.0.take() {
-            sender.unbounded_send(BroadcastChanEvent::RecvClose).ok();
-        }
-    }
-}
-
-type BcastJoinHandle = JoinHandle<Result<(), BroadcastChanError>>;
-pub(super) struct BroadcastForward {
-    future: futures::future::Join<BcastJoinHandle, BcastJoinHandle>,
-    sender: mpsc::UnboundedSender<BroadcastChanEvent>,
-}
-
-impl BroadcastForward {
-    pub(super) fn new(
-        mut n_send: OutStream,
-        mut n_recv: InStream,
-        mut bn: BroadcastNew,
-    ) -> Result<Self, BroadcastChanError> {
-        match bn.0.take() {
-            None => Err(BroadcastChanError::Empty),
-            Some((sender, send, recv)) => {
-                let fsend = tokio::spawn(async move {
-                    loop {
-                        send.send(match n_recv.try_next().await? {
-                            None => return Ok(()),
-                            Some(b) => b.freeze(),
-                        })
-                        .await?;
-                    }
-                });
-                let frecv = tokio::spawn(async move {
-                    loop {
-                        n_send.send(recv.recv().await?).await?;
-                    }
-                });
-                let future = futures::future::join(fsend, frecv);
-                Ok(Self { future, sender })
-            }
-        }
-    }
-}
-
-impl Drop for BroadcastForward {
-    fn drop(&mut self) {
-        self.sender.unbounded_send(BroadcastChanEvent::RecvClose).ok();
-    }
-}
-
-impl Future for BroadcastForward {
-    type Output = Result<(), BroadcastChanError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match self.future.poll_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready((f1, f2)) => match (f1, f2) {
-                (Err(e), _) | (_, Err(e)) => Poll::Ready(Err(e.into())),
-                (Ok(v1), Ok(v2)) => Poll::Ready(v1.and(v2)),
-            },
-        }
-    }
-}
-
-/* *************************************************************************** */
-
-struct BcastSendWritable(Option<mpsc::Sender<Bytes>>);
-impl Future for BcastSendWritable {
-    type Output = Result<mpsc::Sender<Bytes>, <mpsc::Sender<Bytes> as Sink<Bytes>>::Error>;
+struct BcastSendReady(Option<OutStream>, bool);
+impl Future for BcastSendReady {
+    type Output = Result<(OutStream, bool), <OutStream as Sink<Bytes>>::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         if self.0.is_none() {
             panic!("awaited future twice");
         }
 
+        // if we're flushing, keep flushing
+        if self.1 {
+            match self.0.as_mut().unwrap().poll_flush_unpin(cx) {
+                Poll::Pending => (),
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Ready(Ok(())) => self.1 = false,
+            }
+        }
+
+        // poll until it's ready to go
         match self.0.as_mut().unwrap().poll_ready_unpin(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(())) => Poll::Ready(Ok(self.0.take().unwrap())),
+            Poll::Ready(Ok(())) => Poll::Ready(Ok((self.0.take().unwrap(), self.1))),
         }
     }
 }
 
+struct BcastSendClose(Option<OutStream>);
+impl Future for BcastSendClose {
+    type Output = Result<(), <OutStream as Sink<Bytes>>::Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        if self.0.is_none() {
+            Poll::Ready(Ok(()))
+        } else {
+            self.0.as_mut().unwrap().poll_close_unpin(cx)
+        }
+    }
+}
+
+// stream setup
+// [ incoming from clients ] -> SelectAll -> BcastFanout -> [ outgoing to clients ]
+type BcastFanin = stream::SelectAll<InStream>;
 struct BcastFanout {
-    recv: mpsc::Receiver<Bytes>,                        // should be bounded to 32ish
-    ready: Vec<mpsc::Sender<Bytes>>,                    // should be bounded to 1
-    waiting: FuturesUnordered<BcastSendWritable>,
+    recv: BcastFanin,
+    ready: Vec<(OutStream, bool)>,
+    waiting: FuturesUnordered<BcastSendReady>,
+    closing: Option<FuturesUnordered<BcastSendClose>>,
     buf: Option<Bytes>,
-    driver: Option<Waker>,
-    flushing: bool,
 }
 
 impl BcastFanout {
-    fn new(recv: mpsc::Receiver<Bytes>, send: mpsc::Sender<Bytes>) -> Self {
-        let ready = vec!(send);
+    fn new(send: OutStream, recv: InStream) -> Self {
+        let recv = {
+            let mut tmp = stream::SelectAll::new();
+            tmp.push(recv);
+            tmp
+        };
+        let ready = vec![(send, false)];
         Self {
             recv,
             ready,
             waiting: FuturesUnordered::new(),
+            closing: None,
             buf: None,
-            driver: None,
-            flushing: false,
         }
     }
 
-    fn push(&mut self, it: mpsc::Sender<Bytes>) {
-        self.waiting.push(BcastSendWritable(Some(it)));
-        if let Some(task) = self.driver.take() {
-            task.wake();
-        }
+    fn push(&mut self, send: OutStream, recv: InStream) {
+        self.waiting.push(BcastSendReady(Some(send), false));
+        self.recv.push(recv);
+    }
+
+    fn get_ready_waiting(&mut self) -> (&mut Vec<(OutStream, bool)>, &FuturesUnordered<BcastSendReady>) {
+        (&mut self.ready, &self.waiting)
+    }
+
+    fn get_ready_closing(
+        &mut self,
+    ) -> (
+        &mut Vec<(OutStream, bool)>,
+        &mut Option<FuturesUnordered<BcastSendClose>>,
+    ) {
+        (&mut self.ready, &mut self.closing)
     }
 }
 
@@ -278,22 +230,97 @@ impl Future for BcastFanout {
     type Output = Result<(), BroadcastChanError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        match &self.driver {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => self.driver = Some(cx.waker().clone()),
-        };
-
-        loop {
-            if self.buf.is_some() {
-                // check whether we can write; if not, just break
-                // otherwise, write the value
-            }
-
-            // now need to flush
-
-            // now need to check for next incoming value on recv
+        // done when there's no one left listening
+        if self.ready.is_empty() && self.waiting.is_empty() && self.closing.as_ref().map_or(true, |c| c.is_empty())
+        {
+            // all done
+            return Poll::Ready(Ok(()));
         }
 
+        let mut need_wait_poll: bool;
+        'outer: loop {
+            if self.closing.is_some() {
+                // push all the ready sinks into the closer
+                let (ready, closing) = self.get_ready_closing();
+                let closing = closing.as_mut().unwrap();
+                ready.drain(..).for_each(|(s, _)| closing.push(BcastSendClose(Some(s))));
+
+                // empty the closer of finished sinks
+                let mut closed = 0;
+                loop {
+                    match self.closing.as_mut().unwrap().poll_next_unpin(cx) {
+                        Poll::Pending => break,
+                        Poll::Ready(None) => return Poll::Ready(Ok(())),
+                        Poll::Ready(Some(_)) => (),
+                    };
+                    closed += 1;
+                    if closed >= MAX_LOOPS {
+                        // yield but immediately reschedule
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                }
+            }
+
+            // slurp up all the writable sinks
+            let mut readied = 0;
+            loop {
+                need_wait_poll = false;
+                let sink = match self.waiting.poll_next_unpin(cx) {
+                    Poll::Pending => break 'outer,         // waiting for sinks to be writable
+                    Poll::Ready(None) => break,            // all sinks are writable now
+                    Poll::Ready(Some(Err(_))) => continue, // err means this sink is gone
+                    Poll::Ready(Some(Ok(s))) => s,         // ok means this sink is ready
+                };
+                self.ready.push(sink);
+                readied += 1;
+                if readied >= MAX_LOOPS {
+                    // yield but immediately reschedule
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            }
+
+            if self.closing.is_none() {
+                // if we get here, sink is ready for writing
+                if let Some(item) = self.buf.take() {
+                    let (ready, waiting) = self.get_ready_waiting();
+                    for (mut sink, _) in ready.drain(..) {
+                        // drop the sink if there was an error, otherwise wait on it again
+                        if sink.start_send_unpin(item.clone()).is_ok() {
+                            // mark this sink as needing a flush, too
+                            waiting.push(BcastSendReady(Some(sink), true));
+                            need_wait_poll = true; // need to call poll_next on self.waiting
+                        }
+                    }
+                }
+
+                match self.recv.poll_next_unpin(cx) {
+                    Poll::Pending if need_wait_poll => (),
+                    Poll::Pending => break,
+                    Poll::Ready(Some(Err(_))) => (),
+                    Poll::Ready(Some(Ok(item))) => {
+                        self.buf.replace(item.freeze());
+                    }
+                    Poll::Ready(None) => {
+                        // nothing is waiting and stream is closed, so close all the sinks
+                        let (ready, closing) = self.get_ready_closing();
+                        closing.replace(ready.drain(..).map(|(s, _)| BcastSendClose(Some(s))).collect());
+                    }
+                }
+            }
+        }
+
+        let mut errs = Vec::new();
+        for (idx, (ref mut sink, ref mut flushing)) in self.ready.iter_mut().enumerate() {
+            if *flushing {
+                match sink.poll_flush_unpin(cx) {
+                    Poll::Pending => (),
+                    Poll::Ready(Err(_)) => errs.push(idx),
+                    Poll::Ready(Ok(())) => *flushing = false,
+                }
+            }
+        }
         Poll::Pending
     }
 }

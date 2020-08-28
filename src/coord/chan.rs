@@ -7,7 +7,6 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::bchan::{BroadcastChanError, BroadcastForward, BroadcastNew};
 use super::CoordEvent;
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
@@ -34,6 +33,9 @@ pub type NewInStream = (String, u32, OutStream, InStream);
 /// Coordinator channel driver errors
 #[derive(Debug, Error)]
 pub enum CoordChanError {
+    /// Received a request for an unknown stream-id
+    #[error(display = "Unknown streamid")]
+    UnknownSid,
     /// Peer closed connection
     #[error(display = "Peer closed connection")]
     PeerClosed,
@@ -73,7 +75,7 @@ pub(super) struct CoordChanInner {
     to_send: VecDeque<ControlMsg>,
     flushing: bool,
     new_streams: HashMap<u32, (SendStream, RecvStream)>,
-    new_broadcasts: HashMap<u32, BroadcastNew>,
+    new_broadcasts: HashMap<u32, String>,
     is_sender: mpsc::UnboundedSender<NewInStream>,
     sids: HashSet<u32>,
 }
@@ -86,8 +88,6 @@ pub(super) enum CoordChanEvent {
     NCErr(u32),
     NCReq(String, u32, Vec<u8>),
     NCRes(u32, SocketAddr, Vec<u8>),
-    NBRes(u32, BroadcastNew),
-    NBErr(u32),
     BiIn(StreamTo, OutStream, InStream),
     BiOut(u32, ConnectingOutStreamHandle),
 }
@@ -128,10 +128,11 @@ impl CoordChanInner {
                     .coord
                     .unbounded_send(CoordEvent::NewChannelErr(to, sid))
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
-                ControlMsg::NewBroadcastReq(chan, sid) => self
-                    .coord
-                    .unbounded_send(CoordEvent::NewBroadcastReq(self.peer.clone(), chan, sid))
-                    .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
+                ControlMsg::NewBroadcastReq(chan, sid) => {
+                    self.to_send.push_back(ControlMsg::NewBroadcastOk(sid));
+                    self.new_broadcasts.insert(sid, chan);
+                    Ok(())
+                }
                 ControlMsg::KeepAlive => {
                     self.to_send.push_back(ControlMsg::KeepAlive);
                     Ok(())
@@ -190,25 +191,21 @@ impl CoordChanInner {
                 NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
                 NCReq(to, sid, cert) => self.to_send.push_back(ControlMsg::CertReq(to, sid, cert)),
                 NCRes(sid, addr, cert) => self.to_send.push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
-                NBRes(sid, res) => {
-                    self.to_send.push_back(ControlMsg::NewBroadcastOk(sid));
-                    self.new_broadcasts.insert(sid, res);
-                }
-                NBErr(sid) => {
-                    self.to_send.push_back(ControlMsg::NewBroadcastErr(sid));
-                }
                 BiIn(sid, n_send, n_recv) => match sid {
-                    StreamTo::Broadcast(sid) => match self
-                        .new_broadcasts
-                        .remove(&sid)
-                        .ok_or(BroadcastChanError::Empty)
-                        .and_then(|res| BroadcastForward::new(n_send, n_recv, res))
-                    {
-                        Err(_) => self.to_send.push_back(ControlMsg::NewBroadcastErr(sid)),
-                        Ok(bf) => {
-                            tokio::spawn(async move { bf.await });
+                    StreamTo::Broadcast(sid) => {
+                        let res = self
+                            .new_broadcasts
+                            .remove(&sid)
+                            .ok_or(CoordChanError::UnknownSid)
+                            .and_then(|chan| {
+                                self.coord
+                                    .unbounded_send(CoordEvent::NewBroadcastReq(chan, n_send, n_recv))
+                                    .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error()))
+                            });
+                        if res.is_err() {
+                            self.to_send.push_back(ControlMsg::NewBroadcastErr(sid));
                         }
-                    },
+                    }
                     StreamTo::Client(sid) => {
                         if let Some((send, recv)) = self.new_streams.remove(&sid) {
                             let from = self.peer.clone();

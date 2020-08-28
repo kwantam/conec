@@ -164,7 +164,6 @@ mod consts {
     pub(crate) const MAX_LOOPS: usize = 8;
     pub(crate) const VERSION: &str = "CONEC_V0.0.10";
     pub(crate) const STRICT_CTRL: bool = true;
-    pub(crate) const BCAST_QUEUE: usize = 32;
 }
 
 /// Re-exports from quinn
