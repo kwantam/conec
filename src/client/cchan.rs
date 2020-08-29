@@ -207,7 +207,6 @@ impl Drop for ClientClientChanDriver {
             .ok();
 
         // take down just our connection
-        inner.ctrl.close();
         inner.conn.close(b"chan driver died");
         inner.sender.disconnect();
         inner.ichan.disconnect();

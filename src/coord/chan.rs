@@ -367,7 +367,6 @@ impl Drop for CoordChanDriver {
             .ok();
 
         // just take down this channel, don't stop the whole world
-        inner.ctrl.close();
         inner.conn.close(b"coord driver died");
         inner.coord.disconnect();
         inner.sender.close_channel();
