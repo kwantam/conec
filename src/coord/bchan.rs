@@ -30,10 +30,6 @@ pub(super) enum BroadcastChanError {
     NoReceivers,
     #[error(display = "error receiving from client")]
     ClientRecv(#[source] std::io::Error),
-    #[error(display = "error sending to broadcast")]
-    BcastSend(#[source] async_channel::SendError<Bytes>),
-    #[error(display = "error receiving from broadcast")]
-    BcastRecv(#[source] async_channel::RecvError),
 }
 
 pub(super) type BroadcastChanEvent = (OutStream, InStream);
