@@ -166,15 +166,52 @@ impl Future for BcastSendReady {
     }
 }
 
-struct BcastSendClose(Option<OutStream>);
-impl Future for BcastSendClose {
-    type Output = Result<(), <OutStream as Sink<Bytes>>::Error>;
+struct BcastSendFlushClose {
+    send: Option<OutStream>,
+    closing: bool,
+    driver: Option<Waker>,
+}
+
+impl BcastSendFlushClose {
+    fn new(send: OutStream, closing: bool) -> Self {
+        Self {
+            send: Some(send),
+            closing,
+            driver: None,
+        }
+    }
+
+    fn take(&mut self) -> Option<OutStream> {
+        if let Some(task) = self.driver.take() {
+            task.wake();
+        }
+        self.send.take()
+    }
+}
+
+impl Future for BcastSendFlushClose {
+    type Output = Result<Option<OutStream>, <OutStream as Sink<Bytes>>::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        if self.0.is_none() {
-            Poll::Ready(Ok(()))
+        match &self.driver {
+            Some(w) if w.will_wake(cx.waker()) => (),
+            _ => self.driver = Some(cx.waker().clone()),
+        };
+
+        if self.send.is_none() {
+            Poll::Ready(Ok(None))
+        } else if self.closing {
+            match self.send.as_mut().unwrap().poll_close_unpin(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                Poll::Ready(Ok(())) => Poll::Ready(Ok(None)),
+            }
         } else {
-            self.0.as_mut().unwrap().poll_close_unpin(cx)
+            match self.send.as_mut().unwrap().poll_flush_unpin(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+                Poll::Ready(Ok(())) => Poll::Ready(Ok(self.send.take())),
+            }
         }
     }
 }
@@ -184,10 +221,11 @@ impl Future for BcastSendClose {
 type BcastFanin = stream::SelectAll<InStream>;
 struct BcastFanout {
     recv: BcastFanin,
-    ready: Vec<(OutStream, bool)>,
+    ready: Vec<OutStream>,
     waiting: FuturesUnordered<BcastSendReady>,
-    closing: Option<FuturesUnordered<BcastSendClose>>,
+    flush_close: FuturesUnordered<BcastSendFlushClose>,
     buf: Option<Bytes>,
+    closing: bool,
 }
 
 impl BcastFanout {
@@ -197,13 +235,14 @@ impl BcastFanout {
             tmp.push(recv);
             tmp
         };
-        let ready = vec![(send, false)];
+        let ready = vec![send];
         Self {
             recv,
             ready,
             waiting: FuturesUnordered::new(),
-            closing: None,
+            flush_close: FuturesUnordered::new(),
             buf: None,
+            closing: false,
         }
     }
 
@@ -212,17 +251,14 @@ impl BcastFanout {
         self.recv.push(recv);
     }
 
-    fn get_ready_waiting(&mut self) -> (&mut Vec<(OutStream, bool)>, &FuturesUnordered<BcastSendReady>) {
-        (&mut self.ready, &self.waiting)
-    }
-
-    fn get_ready_closing(
+    fn get_rwf(
         &mut self,
     ) -> (
-        &mut Vec<(OutStream, bool)>,
-        &mut Option<FuturesUnordered<BcastSendClose>>,
+        &mut Vec<OutStream>,
+        &FuturesUnordered<BcastSendReady>,
+        &mut FuturesUnordered<BcastSendFlushClose>,
     ) {
-        (&mut self.ready, &mut self.closing)
+        (&mut self.ready, &self.waiting, &mut self.flush_close)
     }
 }
 
@@ -231,48 +267,61 @@ impl Future for BcastFanout {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         // done when there's no one left listening
-        if self.ready.is_empty() && self.waiting.is_empty() && self.closing.as_ref().map_or(true, |c| c.is_empty())
-        {
+        if self.ready.is_empty() && self.waiting.is_empty() && self.flush_close.is_empty() {
             // all done
             return Poll::Ready(Ok(()));
         }
 
-        let mut need_wait_poll: bool;
-        'outer: loop {
-            if self.closing.is_some() {
-                // push all the ready sinks into the closer
-                let (ready, closing) = self.get_ready_closing();
-                let closing = closing.as_mut().unwrap();
-                ready.drain(..).for_each(|(s, _)| closing.push(BcastSendClose(Some(s))));
+        let mut need_flush: bool;
+        let mut need_wait: bool;
+        loop {
+            // push all the ready sinks into the closer
+            if self.closing {
+                let (ready, _, flush_close) = self.get_rwf();
+                ready
+                    .drain(..)
+                    .for_each(|s| flush_close.push(BcastSendFlushClose::new(s, true)));
+            }
 
-                // empty the closer of finished sinks
-                let mut closed = 0;
-                loop {
-                    match self.closing.as_mut().unwrap().poll_next_unpin(cx) {
-                        Poll::Pending => break 'outer,
-                        Poll::Ready(None) => return Poll::Ready(Ok(())),
-                        Poll::Ready(Some(_)) => (),
-                    };
-                    closed += 1;
-                    if closed >= MAX_LOOPS {
-                        // yield but immediately reschedule
-                        cx.waker().wake_by_ref();
-                        return Poll::Pending;
-                    }
+            // empty the flusher / closer of finished sinks
+            let mut closed = 0;
+            loop {
+                need_flush = false;
+                match self.flush_close.poll_next_unpin(cx) {
+                    Poll::Pending if self.closing => return Poll::Pending,
+                    Poll::Ready(None) if self.closing => return Poll::Ready(Ok(())),
+                    Poll::Pending | Poll::Ready(None) => break,
+                    Poll::Ready(Some(Err(_))) => continue,
+                    Poll::Ready(Some(Ok(None))) => (),
+                    Poll::Ready(Some(Ok(Some(s)))) => self.ready.push(s),
+                };
+                closed += 1;
+                if closed >= MAX_LOOPS {
+                    // yield but immediately reschedule
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
                 }
             }
 
             // slurp up all the writable sinks
             let mut readied = 0;
             loop {
-                need_wait_poll = false;
-                let sink = match self.waiting.poll_next_unpin(cx) {
-                    Poll::Pending => break 'outer,         // waiting for sinks to be writable
+                need_wait = false;
+                let (sink, flushing) = match self.waiting.poll_next_unpin(cx) {
+                    Poll::Pending => return Poll::Pending, // waiting for sinks to be writable
                     Poll::Ready(None) => break,            // all sinks are writable now
                     Poll::Ready(Some(Err(_))) => continue, // err means this sink is gone
-                    Poll::Ready(Some(Ok(s))) => s,         // ok means this sink is ready
+                    Poll::Ready(Some(Ok(sf))) => sf,       // ok means this sink is ready
                 };
-                self.ready.push(sink);
+                if self.closing {
+                    self.flush_close.push(BcastSendFlushClose::new(sink, true));
+                    need_flush = true;
+                } else if flushing {
+                    self.flush_close.push(BcastSendFlushClose::new(sink, false));
+                    need_flush = true;
+                } else {
+                    self.ready.push(sink);
+                }
                 readied += 1;
                 if readied >= MAX_LOOPS {
                     // yield but immediately reschedule
@@ -281,46 +330,37 @@ impl Future for BcastFanout {
                 }
             }
 
-            if self.closing.is_none() {
+            if !self.closing {
                 // if we get here, sink is ready for writing
                 if let Some(item) = self.buf.take() {
-                    let (ready, waiting) = self.get_ready_waiting();
-                    for (mut sink, _) in ready.drain(..) {
+                    let (ready, waiting, flush_close) = self.get_rwf();
+                    // drain flushers into ready --- we're about to write to them again
+                    for fc in flush_close.iter_mut() {
+                        if let Some(sink) = fc.take() {
+                            ready.push(sink);
+                        }
+                    }
+                    for mut sink in ready.drain(..) {
                         // drop the sink if there was an error, otherwise wait on it again
                         if sink.start_send_unpin(item.clone()).is_ok() {
                             // mark this sink as needing a flush, too
+                            // XXX in principle we could wait to flush until just before we return...
                             waiting.push(BcastSendReady(Some(sink), true));
-                            need_wait_poll = true; // need to call poll_next on self.waiting
+                            need_wait = true; // need to call poll_next on self.waiting
                         }
                     }
                 }
 
                 match self.recv.poll_next_unpin(cx) {
-                    Poll::Pending if need_wait_poll => (),
-                    Poll::Pending => break,
+                    Poll::Pending if need_wait || need_flush => (),
+                    Poll::Pending => return Poll::Pending,
                     Poll::Ready(Some(Err(_))) => (),
                     Poll::Ready(Some(Ok(item))) => {
                         self.buf.replace(item.freeze());
                     }
-                    Poll::Ready(None) => {
-                        // nothing is waiting and stream is closed, so close all the sinks
-                        let (ready, closing) = self.get_ready_closing();
-                        closing.replace(ready.drain(..).map(|(s, _)| BcastSendClose(Some(s))).collect());
-                    }
+                    Poll::Ready(None) => self.closing = true,
                 }
             }
         }
-
-        let mut errs = Vec::new();
-        for (idx, (ref mut sink, ref mut flushing)) in self.ready.iter_mut().enumerate() {
-            if *flushing {
-                match sink.poll_flush_unpin(cx) {
-                    Poll::Pending => (),
-                    Poll::Ready(Err(_)) => errs.push(idx),
-                    Poll::Ready(Ok(())) => *flushing = false,
-                }
-            }
-        }
-        Poll::Pending
     }
 }
