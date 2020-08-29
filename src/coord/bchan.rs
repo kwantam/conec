@@ -249,7 +249,7 @@ impl Future for BcastFanout {
                 let mut closed = 0;
                 loop {
                     match self.closing.as_mut().unwrap().poll_next_unpin(cx) {
-                        Poll::Pending => break,
+                        Poll::Pending => break 'outer,
                         Poll::Ready(None) => return Poll::Ready(Ok(())),
                         Poll::Ready(Some(_)) => (),
                     };

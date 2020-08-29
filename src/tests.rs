@@ -523,6 +523,137 @@ fn test_broadcast_bidi() {
 }
 
 #[test]
+fn test_broadcast_sender_close() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (mut client2, _inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 2);
+
+        // open broadcast streams
+        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+
+        let to_send = Bytes::from("loopback broadcast");
+        s1.send(to_send.clone()).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec2 = r2.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+        assert_eq!(to_send, rec2);
+        s2.send(rec1).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec2 = r2.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+        assert_eq!(to_send, rec2);
+
+        assert_eq!(coord.num_broadcasts(), 1);
+
+        drop(s1);
+        drop(s2);
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_broadcasts(), 0);
+        assert!(r1.try_next().await?.is_none());
+        assert!(r2.try_next().await?.is_none());
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_broadcast_receiver_close() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (mut client2, _inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 2);
+
+        // open broadcast streams
+        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+
+        let to_send = Bytes::from("loopback broadcast");
+        s1.send(to_send.clone()).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec2 = r2.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+        assert_eq!(to_send, rec2);
+        s2.send(rec1).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec2 = r2.try_next().await?.unwrap().freeze();
+        assert_eq!(to_send, rec1);
+        assert_eq!(to_send, rec2);
+
+        assert_eq!(coord.num_broadcasts(), 1);
+
+        drop(r1);
+        drop(r2);
+        assert_eq!(coord.num_broadcasts(), 1);
+
+        s1.send(to_send.clone()).await.unwrap();
+        s2.send(to_send.clone()).await.unwrap();
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_broadcasts(), 1);
+
+        drop(s1);
+        drop(s2);
+        time::delay_for(Duration::from_millis(40)).await;
+        assert_eq!(coord.num_broadcasts(), 0);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
 fn test_channel_errors() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
