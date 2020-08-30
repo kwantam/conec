@@ -40,6 +40,9 @@ pub enum BcastInStreamError {
     /// Polling the input stream failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
+    /// Codec error (see tokio_serde::formats codecs)
+    #[error(display = "Codec error: {:?}", _0)]
+    Codec(#[source] io::Error),
 }
 
 impl From<BcastInStreamError> for io::Error {

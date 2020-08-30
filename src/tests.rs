@@ -17,10 +17,12 @@ use anyhow::Context;
 use bytes::Bytes;
 use futures::prelude::*;
 use quinn::{Certificate, CertificateChain, PrivateKey};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{fs, io};
 use tokio::{runtime, time};
+use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 
 #[test]
 fn test_simple() {
@@ -516,6 +518,70 @@ fn test_broadcast_bidi() {
         drop(s1);
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_broadcasts(), 0);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_broadcast_codec() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (mut client2, _inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 2);
+
+        #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+        enum TestValues {
+            ValueOne,
+            ValueTwo,
+        }
+
+        // open broadcast streams and wrap in codec
+        let (s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut s1 = SymmetricallyFramed::new(s1, SymmetricalBincode::<TestValues>::default());
+        let mut r1 = SymmetricallyFramed::new(r1, SymmetricalBincode::<TestValues>::default());
+
+        let (s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut s2 = SymmetricallyFramed::new(s2, SymmetricalBincode::<TestValues>::default());
+        let mut r2 = SymmetricallyFramed::new(r2, SymmetricalBincode::<TestValues>::default());
+
+        s1.send(TestValues::ValueOne).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap();
+        let rec2 = r2.try_next().await?.unwrap();
+        assert_eq!(rec1, TestValues::ValueOne);
+        assert_eq!(rec2, TestValues::ValueOne);
+
+        s2.send(TestValues::ValueTwo).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap();
+        let rec2 = r2.try_next().await?.unwrap();
+        assert_eq!(rec1, TestValues::ValueTwo);
+        assert_eq!(rec2, TestValues::ValueTwo);
 
         Ok(()) as Result<(), std::io::Error>
     })
