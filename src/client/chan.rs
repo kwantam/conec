@@ -7,14 +7,11 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::ibstream::{
-    BcastInStream, BcastInStreamDriver, BcastInStreamRef, ConnectingBcastStream, ConnectingBcastStreamHandle,
-};
 use super::ichan::{IncomingChannelsEvent, NewChannelError};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStream, OutStreamError,
-    StreamPeer, StreamTo,
+    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError, StreamPeer,
+    StreamTo,
 };
 use crate::util;
 
@@ -23,7 +20,6 @@ use futures::{
     channel::{mpsc, oneshot},
     prelude::*,
 };
-use quinn::RecvStream;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -79,7 +75,6 @@ pub(super) struct ClientChanInner {
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
     new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
-    new_bcasts: HashMap<u32, Option<ConnectingBcastStreamHandle>>,
     new_channels: HashMap<u32, Option<(String, ConnectingChannelHandle)>>,
     flushing: bool,
     keepalive: Option<Interval>,
@@ -94,15 +89,7 @@ impl ClientChanInner {
         }
     }
 
-    fn new_stream<T, F>(
-        &mut self,
-        chan: oneshot::Sender<Result<(OutStream, T), OutStreamError>>,
-        sid: StreamTo,
-        to_instream: F,
-    ) where
-        T: 'static + Send,
-        F: 'static + Send + FnOnce(RecvStream) -> T,
-    {
+    fn new_stream(&mut self, chan: ConnectingOutStreamHandle, sid: StreamTo) {
         let bi = self.conn.open_bi();
         tokio::spawn(async move {
             chan.send(
@@ -120,7 +107,7 @@ impl ClientChanInner {
 
                     // send resulting OutStream and InStream to the receiver
                     let outstream = write_stream.into_inner();
-                    let instream = to_instream(recv);
+                    let instream = FramedRead::new(recv, LengthDelimitedCodec::new());
                     Ok((outstream, instream))
                 }
                 .await,
@@ -163,21 +150,14 @@ impl ClientChanInner {
                 Poll::Ready(Some(Ok(msg))) => Ok(msg),
             }?;
             match msg {
-                NewStreamOk(sid) => {
+                NewStreamOk(sid) | NewBroadcastOk(sid) => {
                     let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
-                    let sid = StreamTo::Client(sid);
-                    self.new_stream(chan, sid, |recv| FramedRead::new(recv, LengthDelimitedCodec::new()));
-                    Ok(())
-                }
-                NewBroadcastOk(sid) => {
-                    let chan = Self::get_new_str_or_ch(sid, &mut self.new_bcasts)?;
-                    let sid = StreamTo::Broadcast(sid);
-                    self.new_stream(chan, sid, |recv| {
-                        let inner = BcastInStreamRef::new(FramedRead::new(recv, LengthDelimitedCodec::new()));
-                        let driver = BcastInStreamDriver(inner.clone());
-                        tokio::spawn(async move { driver.await });
-                        BcastInStream(inner)
-                    });
+                    let sid = if let NewStreamOk(_) = msg {
+                        StreamTo::Client(sid)
+                    } else {
+                        StreamTo::Broadcast(sid)
+                    };
+                    self.new_stream(chan, sid);
                     Ok(())
                 }
                 NewChannelOk(sid, addr, cert) => {
@@ -269,7 +249,6 @@ impl ClientChanRef {
             driver: None,
             to_send: VecDeque::new(),
             new_streams: HashMap::new(),
-            new_bcasts: HashMap::new(),
             new_channels: HashMap::new(),
             flushing: false,
             keepalive: None,
@@ -314,14 +293,14 @@ impl ClientChan {
         let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
-        if inner.new_streams.get(&sid).is_some() || inner.new_bcasts.get(&sid).is_some() {
+        if inner.new_streams.get(&sid).is_some() {
             sender.send(Err(OutStreamError::StreamId)).ok();
         } else if to.is_coord() {
             // record that we've used this sid
             inner.new_streams.insert(sid, None);
             // send the coordinator a request and record the send side of the channel
             let sid = StreamTo::Coord(sid);
-            inner.new_stream(sender, sid, |recv| FramedRead::new(recv, LengthDelimitedCodec::new()));
+            inner.new_stream(sender, sid);
         } else {
             inner
                 .to_send
@@ -349,19 +328,19 @@ impl ClientChan {
         ConnectingChannel(receiver)
     }
 
-    pub(super) fn new_broadcast(&self, chan: String, sid: u32) -> ConnectingBcastStream {
+    pub(super) fn new_broadcast(&self, chan: String, sid: u32) -> ConnectingOutStream {
         let (sender, receiver) = oneshot::channel();
         let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
-        if inner.new_streams.get(&sid).is_some() || inner.new_bcasts.get(&sid).is_some() {
+        if inner.new_streams.get(&sid).is_some() {
             sender.send(Err(OutStreamError::StreamId)).ok();
         } else {
             inner.to_send.push_back(ControlMsg::NewBroadcastReq(chan, sid));
-            inner.new_bcasts.insert(sid, Some(sender));
+            inner.new_streams.insert(sid, Some(sender));
             inner.wake();
         }
 
-        ConnectingBcastStream(receiver)
+        ConnectingOutStream(receiver)
     }
 }

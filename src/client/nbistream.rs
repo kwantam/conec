@@ -8,32 +8,22 @@
 // except according to those terms.
 
 use crate::consts::{BCAST_QUEUE, MAX_LOOPS};
-use crate::types::{InStream, OutStream, OutStreamError};
+use crate::types::InStream;
 
 use arraydeque::{ArrayDeque, Wrapping};
 use bytes::BytesMut;
 use err_derive::Error;
-use futures::{channel::oneshot, prelude::*};
+use futures::prelude::*;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-def_cs_future!(
-    ConnectingBcastStream,
-    pub(super),
-    ConnectingBcastStreamHandle,
-    pub(super),
-    (OutStream, BcastInStream),
-    OutStreamError,
-    doc = "A broadcast stream that is connecting"
-);
+type BytesMutQueue = ArrayDeque<[BytesMut; BCAST_QUEUE], Wrapping>;
 
-type BcastQueue = ArrayDeque<[BytesMut; BCAST_QUEUE], Wrapping>;
-
-/// Err variant returned by BcastInStream
+/// Err variant returned by NonblockingInStream
 #[derive(Debug, Error)]
-pub enum BcastInStreamError {
+pub enum NonblockingInStreamError {
     /// Client lagged and missed some messages. Stream can still be read.
     #[error(display = "Lagged and dropped {} messages", _0)]
     Lagged(usize),
@@ -45,15 +35,16 @@ pub enum BcastInStreamError {
     Codec(#[source] io::Error),
 }
 
-impl From<BcastInStreamError> for io::Error {
-    fn from(err: BcastInStreamError) -> Self {
+// this is needed for doing recv.try_next().await?
+impl From<NonblockingInStreamError> for io::Error {
+    fn from(err: NonblockingInStreamError) -> Self {
         io::Error::new(io::ErrorKind::Other, err)
     }
 }
 
-pub(super) struct BcastInStreamInner {
+pub(super) struct NblkInStreamInner {
     recv: InStream,
-    queue: BcastQueue,
+    queue: BytesMutQueue,
     ref_count: usize,
     driver: Option<Waker>,
     lagged: usize,
@@ -61,8 +52,8 @@ pub(super) struct BcastInStreamInner {
     reader: Option<Waker>,
 }
 
-impl BcastInStreamInner {
-    fn drive_recv(&mut self, cx: &mut Context) -> Result<Option<bool>, BcastInStreamError> {
+impl NblkInStreamInner {
+    fn drive_recv(&mut self, cx: &mut Context) -> Result<Option<bool>, NonblockingInStreamError> {
         let mut recvd = 0;
         loop {
             let msg = match self.recv.poll_next_unpin(cx) {
@@ -71,7 +62,7 @@ impl BcastInStreamInner {
                     self.closed = true;
                     break;
                 }
-                Poll::Ready(Some(Err(e))) => Err(BcastInStreamError::StreamPoll(e)),
+                Poll::Ready(Some(Err(e))) => Err(NonblockingInStreamError::StreamPoll(e)),
                 Poll::Ready(Some(Ok(msg))) => Ok(msg),
             }?;
             if self.queue.push_back(msg).is_some() {
@@ -89,7 +80,7 @@ impl BcastInStreamInner {
         }
     }
 
-    fn run_driver(&mut self, cx: &mut Context) -> Result<(), BcastInStreamError> {
+    fn run_driver(&mut self, cx: &mut Context) -> Result<(), NonblockingInStreamError> {
         loop {
             match self.drive_recv(cx)? {
                 None => break,
@@ -107,10 +98,10 @@ impl BcastInStreamInner {
     }
 }
 
-def_ref!(BcastInStreamInner, BcastInStreamRef);
-impl BcastInStreamRef {
-    pub(super) fn new(recv: InStream) -> Self {
-        Self(Arc::new(Mutex::new(BcastInStreamInner {
+def_ref!(NblkInStreamInner, NblkInStreamRef, pub(self));
+impl NblkInStreamRef {
+    fn new(recv: InStream) -> Self {
+        Self(Arc::new(Mutex::new(NblkInStreamInner {
             recv,
             queue: ArrayDeque::new(),
             ref_count: 0,
@@ -122,20 +113,49 @@ impl BcastInStreamRef {
     }
 }
 
-def_driver!(BcastInStreamRef, BcastInStreamDriver, BcastInStreamError);
+def_driver!(pub(self), NblkInStreamRef; pub(self), NblkInStreamDriver; NonblockingInStreamError);
 
-/// Incoming messages from a broadcast stream, or an error indicating the receiver lagged
-pub struct BcastInStream(pub(super) BcastInStreamRef);
+/// An adapter to make an InStream non-blocking from the sender's perspective
+///
+/// By default, OutStreams are blocking: receiving client(s) must receive a message before
+/// the next message can be sent. This can produce undesirable behavior, especially with
+/// broadcast streams where some clients are slow to read.
+///
+/// This adapter can be used to prevent the slow receiver problem. Specifically, any client
+/// that wraps an InStream with this adapter will automatically read messages into
+/// a ring buffer upon arrival. If the ring buffer becomes full, the oldest message will be
+/// overwritten. At the next read, the client will get a [NonblockingInStreamError::Lagged]
+/// error indicating that they have missed some number of messages, after which they can resume
+/// reading messages from the stream as normal.
+///
+/// Note that to prevent blocking for broadcast streams, *all* clients must apply this adapter
+/// to their InStream. This library does not enforce this---it is up to the application to do so.
+/// It is possible to mix nonblocking and blocking clients, e.g., making only the slow clients
+/// nonblocking.
+///
+/// This adapter is compatible with tokio-serde's Framed struct, and in particular it should
+/// work with any of the tokio_serde::formats codecs. See `tests.rs` for an example.
+pub struct NonblockingInStream(NblkInStreamRef);
 
-impl futures::stream::FusedStream for BcastInStream {
+impl NonblockingInStream {
+    /// Create a new NonblockingInStream from an InStream
+    pub fn new(recv: InStream) -> Self {
+        let inner = NblkInStreamRef::new(recv);
+        let driver = NblkInStreamDriver(inner.clone());
+        tokio::spawn(async move { driver.await });
+        Self(inner)
+    }
+}
+
+impl futures::stream::FusedStream for NonblockingInStream {
     fn is_terminated(&self) -> bool {
         let inner = self.0.lock().unwrap();
         inner.lagged == 0 && inner.closed
     }
 }
 
-impl Stream for BcastInStream {
-    type Item = Result<BytesMut, BcastInStreamError>;
+impl Stream for NonblockingInStream {
+    type Item = Result<BytesMut, NonblockingInStreamError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let mut inner = self.0.lock().unwrap();
@@ -150,7 +170,7 @@ impl Stream for BcastInStream {
         if inner.lagged != 0 {
             let lagged = inner.lagged;
             inner.lagged = 0;
-            return Poll::Ready(Some(Err(BcastInStreamError::Lagged(lagged))));
+            return Poll::Ready(Some(Err(NonblockingInStreamError::Lagged(lagged))));
         }
 
         // if we are closed, indicate that too

@@ -9,7 +9,7 @@
 
 use crate::{
     ca::{generate_ca, generate_cert},
-    client::{NewInStream, StreamId},
+    client::{NewInStream, NonblockingInStream, StreamId},
     Client, ClientConfig, Coord, CoordConfig,
 };
 
@@ -565,6 +565,7 @@ fn test_broadcast_codec() {
         // open broadcast streams and wrap in codec
         let (s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
         let mut s1 = SymmetricallyFramed::new(s1, SymmetricalBincode::<TestValues>::default());
+        let r1 = NonblockingInStream::new(r1);
         let mut r1 = SymmetricallyFramed::new(r1, SymmetricalBincode::<TestValues>::default());
 
         let (s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();

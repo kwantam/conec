@@ -12,8 +12,6 @@
 mod conn;
 mod ctrlstream;
 
-use crate::client::BcastInStreamError;
-
 pub(crate) use conn::ConecConn;
 pub use conn::ConecConnError;
 pub(crate) use ctrlstream::CtrlStream;
@@ -129,9 +127,6 @@ pub enum OutStreamError {
     /// Failed to initialize stream
     #[error(display = "Stream initialization: {:?}", _0)]
     InitStream(#[source] io::Error),
-    /// Broadcast stream error
-    #[error(display = "Broadcast stream: {:?}", _0)]
-    Broadcast(#[source] BcastInStreamError),
 }
 
 def_cs_future!(
