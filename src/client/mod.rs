@@ -28,6 +28,7 @@ use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
+pub use ibstream::{BcastInStream, BcastInStreamError, ConnectingBcastStream};
 pub use ichan::{ClosingChannel, IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream, StreamId};
@@ -240,7 +241,7 @@ impl Client {
     ///
     /// A broadcast channel is a many-to-many stream proxied through the Coordinator.
     /// Any Client who knows the stream's name can send to and receive from it.
-    pub fn new_broadcast(&mut self, chan: String) -> ConnectingOutStream {
+    pub fn new_broadcast(&mut self, chan: String) -> ConnectingBcastStream {
         let ctr = self.ctr;
         self.ctr += 1;
         self.new_broadcast_with_id(chan, ctr)
@@ -249,7 +250,7 @@ impl Client {
     /// Open or connect to a broadcast stream with an explicit stream-id
     ///
     /// The `sid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
-    pub fn new_broadcast_with_id(&self, chan: String, sid: u32) -> ConnectingOutStream {
+    pub fn new_broadcast_with_id(&self, chan: String, sid: u32) -> ConnectingBcastStream {
         self.coord.new_broadcast(chan, sid)
     }
 }

@@ -8,16 +8,26 @@
 // except according to those terms.
 
 use crate::consts::{BCAST_QUEUE, MAX_LOOPS};
-use crate::types::InStream;
+use crate::types::{InStream, OutStream, OutStreamError};
 
 use arraydeque::{ArrayDeque, Wrapping};
 use bytes::BytesMut;
 use err_derive::Error;
-use futures::prelude::*;
+use futures::{channel::oneshot, prelude::*};
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+
+def_cs_future!(
+    ConnectingBcastStream,
+    pub(super),
+    ConnectingBcastStreamHandle,
+    pub(super),
+    (OutStream, BcastInStream),
+    OutStreamError,
+    doc = "A broadcast stream that is connecting"
+);
 
 type BcastQueue = ArrayDeque<[BytesMut; BCAST_QUEUE], Wrapping>;
 
@@ -30,6 +40,12 @@ pub enum BcastInStreamError {
     /// Polling the input stream failed
     #[error(display = "Stream poll: {:?}", _0)]
     StreamPoll(#[error(source, no_from)] io::Error),
+}
+
+impl From<BcastInStreamError> for io::Error {
+    fn from(err: BcastInStreamError) -> Self {
+        io::Error::new(io::ErrorKind::Other, err)
+    }
 }
 
 pub(super) struct BcastInStreamInner {
@@ -105,6 +121,7 @@ impl BcastInStreamRef {
 
 def_driver!(BcastInStreamRef, BcastInStreamDriver, BcastInStreamError);
 
+/// Incoming messages from a broadcast stream, or an error indicating the receiver lagged
 pub struct BcastInStream(pub(super) BcastInStreamRef);
 
 impl futures::stream::FusedStream for BcastInStream {
