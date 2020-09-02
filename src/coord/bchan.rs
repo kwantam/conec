@@ -271,7 +271,7 @@ impl Future for BcastFanout {
         let mut need_flush: bool;
         let mut need_wait: bool;
         loop {
-            // push all the ready sinks into the closer
+            // if closing, push all the ready sinks into the closer
             if self.closing {
                 let (ready, _, flush_close) = self.get_rwf();
                 ready
@@ -281,11 +281,12 @@ impl Future for BcastFanout {
 
             // empty the flusher / closer of finished sinks
             let mut closed = 0;
+            let ready_for_close = self.closing && self.ready.is_empty() && self.waiting.is_empty();
             loop {
                 need_flush = false;
                 match self.flush_close.poll_next_unpin(cx) {
-                    Poll::Pending if self.closing => return Poll::Pending,
-                    Poll::Ready(None) if self.closing => return Poll::Ready(Ok(())),
+                    Poll::Pending if ready_for_close => return Poll::Pending,
+                    Poll::Ready(None) if ready_for_close => return Poll::Ready(Ok(())),
                     Poll::Pending | Poll::Ready(None) => break,
                     Poll::Ready(Some(Err(_))) => continue,
                     Poll::Ready(Some(Ok(None))) => (),
@@ -298,6 +299,7 @@ impl Future for BcastFanout {
                     return Poll::Pending;
                 }
             }
+            drop(ready_for_close);
 
             // slurp up all the writable sinks
             let mut readied = 0;
