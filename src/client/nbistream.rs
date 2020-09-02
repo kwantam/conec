@@ -54,12 +54,17 @@ pub(super) struct NblkInStreamInner {
 
 impl NblkInStreamInner {
     fn drive_recv(&mut self, cx: &mut Context) -> Result<Option<bool>, NonblockingInStreamError> {
+        if self.closed {
+            return Ok(None); // don't poll stream again if it was previously closed
+        }
+
         let mut recvd = 0;
         loop {
             let msg = match self.recv.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => {
                     self.closed = true;
+                    recvd = 1; // force reader wakeup
                     break;
                 }
                 Poll::Ready(Some(Err(e))) => Err(NonblockingInStreamError::StreamPoll(e)),
@@ -73,7 +78,7 @@ impl NblkInStreamInner {
                 return Ok(Some(true));
             }
         }
-        if recvd > 0 {
+        if recvd == 0 {
             Ok(None)
         } else {
             Ok(Some(false))
@@ -83,7 +88,7 @@ impl NblkInStreamInner {
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), NonblockingInStreamError> {
         loop {
             match self.drive_recv(cx)? {
-                None => break,
+                None => break, // nothing received; don't wake waiting reader
                 Some(keep_going) => {
                     if let Some(task) = self.reader.take() {
                         task.wake();
@@ -150,7 +155,7 @@ impl NonblockingInStream {
 impl futures::stream::FusedStream for NonblockingInStream {
     fn is_terminated(&self) -> bool {
         let inner = self.0.lock().unwrap();
-        inner.lagged == 0 && inner.closed
+        inner.lagged == 0 && inner.queue.is_empty() && inner.closed
     }
 }
 
@@ -159,12 +164,8 @@ impl Stream for NonblockingInStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let mut inner = self.0.lock().unwrap();
-
-        // save off the waker --- driver will use it when status changes
-        match &inner.reader {
-            Some(w) if w.will_wake(cx.waker()) => (),
-            _ => inner.reader = Some(cx.waker().clone()),
-        };
+        // cancel pending wakeup request --- below, we restore if necessary.
+        let reader = inner.reader.take();
 
         // if we lost messages, indicate as much
         if inner.lagged != 0 {
@@ -173,15 +174,22 @@ impl Stream for NonblockingInStream {
             return Poll::Ready(Some(Err(NonblockingInStreamError::Lagged(lagged))));
         }
 
-        // if we are closed, indicate that too
-        if inner.closed {
-            return Poll::Ready(None);
-        }
-
         // otherwise, return something from the queue, if it exists
         match inner.queue.pop_front() {
-            None => Poll::Pending,
             Some(item) => Poll::Ready(Some(Ok(item))),
+            None => {
+                if inner.closed {
+                    // now we are closed
+                    Poll::Ready(None)
+                } else {
+                    // save off the waker --- driver will use it when status changes
+                    inner.reader.replace(match reader {
+                        Some(w) if w.will_wake(cx.waker()) => w,
+                        _ => cx.waker().clone(),
+                    });
+                    Poll::Pending
+                }
+            }
         }
     }
 }

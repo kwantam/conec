@@ -9,13 +9,14 @@
 
 use crate::{
     ca::{generate_ca, generate_cert},
-    client::{NewInStream, NonblockingInStream, StreamId},
+    client::{NewInStream, NonblockingInStream, NonblockingInStreamError, StreamId},
+    consts::BCAST_QUEUE,
     Client, ClientConfig, Coord, CoordConfig,
 };
 
 use anyhow::Context;
 use bytes::Bytes;
-use futures::prelude::*;
+use futures::{future, prelude::*};
 use quinn::{Certificate, CertificateChain, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -138,12 +139,7 @@ fn test_stream_uni() {
         s12.send(to_send.clone()).await.unwrap();
         let rec = r12.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
-        /*
-        println!(
-            "{}:{} sent '{:?}' (expected: '{:?}')",
-            sender, strmid, rec, to_send
-        );
-        */
+
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -195,12 +191,99 @@ fn test_stream_bi() {
         s21.send(rec).await.unwrap();
         let rec = r21.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
-        /*
-        println!(
-            "{}:{} sent '{:?}' (expected: '{:?}')",
-            sender, strmid, rec, to_send
-        );
-        */
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
+fn test_stream_block_nonblock() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (_client2, mut inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 2);
+
+        // open stream to client2, make input nonblocking
+        let (mut s12, r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
+        let mut r21 = NonblockingInStream::new(r21);
+        // receive stream at client2
+        let (mut s21, mut r12) = match inc2.next().await.unwrap() {
+            NewInStream::Client(_, _, s21, r12) => (s21, r12),
+            NewInStream::Coord(..) => unreachable!(),
+        };
+
+        // send from client1 to client2 (blocking direction)
+        let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
+        let mut count = 0;
+        loop {
+            let timeout = time::delay_for(Duration::from_millis(100));
+            let send = s12.send(to_send.clone());
+            match future::select(timeout, send).await {
+                future::Either::Left(_) => break,
+                future::Either::Right((r, _)) => r.unwrap(),
+            };
+            count += 1;
+            assert!(count < 1048576);
+        }
+        let count = count;
+        for _ in 0..count {
+            let rec = r12.try_next().await?.unwrap();
+            assert_eq!(rec, to_send);
+        }
+        {
+            let timeout = time::delay_for(Duration::from_millis(100));
+            let recv = r12.try_next();
+            match future::select(timeout, recv).await {
+                future::Either::Left(_) => (),
+                future::Either::Right(_) => panic!("received more than we sent"),
+            };
+        }
+
+        // send from client2 to client1 (nonblocking direction)
+        for _ in 0..count + BCAST_QUEUE {
+            s21.send(to_send.clone()).await.unwrap();
+        }
+        // close send side
+        drop(s21);
+
+        // this is a race, but since everything is local it is probably fine
+        time::delay_for(Duration::from_millis(100)).await;
+        match r21.try_next().await {
+            Err(NonblockingInStreamError::Lagged(num)) => assert_eq!(num, count),
+            _ => panic!("expected lagged error"),
+        };
+        for _ in 0..BCAST_QUEUE {
+            let rec = r21.try_next().await?.unwrap();
+            assert_eq!(rec, to_send);
+        }
+        assert!(r21.try_next().await?.is_none());
+
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -300,12 +383,7 @@ fn test_stream_loopback() {
         s11x.send(rec).await.unwrap();
         let rec = r11x.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
-        /*
-        println!(
-            "{}:{} sent '{:?}' (expected: '{:?}')",
-            sender, strmid, rec, to_send
-        );
-        */
+
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -354,12 +432,6 @@ fn test_stream_client_to_coord() {
             .await
             .is_err());
 
-        /*
-        println!(
-            "{}:{} sent '{:?}' (expected: '{:?}')",
-            sender, strmid, rec, to_send
-        );
-        */
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -410,12 +482,6 @@ fn test_stream_coord_to_client() {
             .await
             .is_err());
 
-        /*
-        println!(
-            "{}:{} sent '{:?}' (expected: '{:?}')",
-            sender, strmid, rec, to_send
-        );
-        */
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
