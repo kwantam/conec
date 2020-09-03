@@ -250,9 +250,6 @@ impl Future for BcastSendFlushClose {
     }
 }
 
-// stream setup
-// [ incoming from clients ] -> SelectAll -> BcastFanout -> [ outgoing to clients ]
-
 // this is like a futures::stream::SelectAll, but it drops incoming streams when they produce an error
 struct BcastFanin(FuturesUnordered<stream::StreamFuture<InStream>>);
 
@@ -312,11 +309,15 @@ impl BcastFanout {
             tmp.push(recv);
             tmp
         };
-        let ready = vec![send];
+        let waiting = {
+            let tmp = FuturesUnordered::new();
+            tmp.push(BcastSendReady::new(send));
+            tmp
+        };
         Self {
             recv,
-            ready,
-            waiting: FuturesUnordered::new(),
+            ready: Vec::new(),
+            waiting,
             flush_close: FuturesUnordered::new(),
             buf: None,
             closing: false,
