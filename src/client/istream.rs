@@ -123,7 +123,7 @@ impl IncomingStreamsInner {
                 StreamPeer::Client(peer) => {
                     sender.unbounded_send(NewInStream::Client(peer, strmid(chanid), outstream, instream))
                 }
-                StreamPeer::Broadcast(_) => unreachable!("broadcast streams are never incoming"),
+                StreamPeer::Broadcast(_) => panic!("broadcast streams are never incoming"),
             }
             .ok();
         });

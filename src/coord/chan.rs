@@ -60,6 +60,9 @@ pub enum CoordChanError {
     /// Error while opening new transport stream
     #[error(display = "Opening Bi stream: {:?}", _0)]
     OpenBiStream(#[error(no_from, source)] ConnectionError),
+    /// Events channel closed
+    #[error(display = "Events channel closed")]
+    EventsClosed,
 }
 
 pub(super) struct CoordChanInner {
@@ -161,15 +164,15 @@ impl CoordChanInner {
             .map_err(CoordChanError::Sink)
     }
 
-    fn handle_events(&mut self, cx: &mut Context) -> bool {
+    fn handle_events(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
         use CoordChanEvent::*;
         let mut accepted = 0;
         loop {
             let event = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => unreachable!("we own a sender"),
-                Poll::Ready(Some(event)) => event,
-            };
+                Poll::Ready(None) => Err(CoordChanError::EventsClosed),
+                Poll::Ready(Some(event)) => Ok(event),
+            }?;
             match event {
                 NSErr(sid) => self.to_send.push_back(ControlMsg::NewStreamErr(sid)),
                 NSRes(sid, res) => match res {
@@ -260,10 +263,10 @@ impl CoordChanInner {
             };
             accepted += 1;
             if accepted >= MAX_LOOPS {
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     fn drive_ibi_recv(&mut self, cx: &mut Context) -> Result<bool, CoordChanError> {
@@ -307,7 +310,7 @@ impl CoordChanInner {
         loop {
             let mut keep_going = false;
             keep_going |= self.drive_ctrl_recv(cx)?;
-            keep_going |= self.handle_events(cx);
+            keep_going |= self.handle_events(cx)?;
             if !self.to_send.is_empty() || self.flushing {
                 keep_going |= self.drive_ctrl_send(cx)?;
             }

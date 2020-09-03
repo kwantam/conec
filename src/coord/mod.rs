@@ -68,6 +68,9 @@ pub enum CoordError {
     /// Error handing off result to driver
     #[error(display = "Error sending to driver: {:?}", _0)]
     Driver(#[source] mpsc::SendError),
+    /// Events channel closed
+    #[error(display = "Events channel closed")]
+    EventsClosed,
 }
 
 enum CoordEvent {
@@ -128,15 +131,15 @@ impl CoordInner {
     }
 
     /// handle events arriving on self.events
-    fn handle_events(&mut self, cx: &mut Context) -> bool {
+    fn handle_events(&mut self, cx: &mut Context) -> Result<bool, CoordError> {
         use CoordEvent::*;
         let mut accepted = 0;
         loop {
             let event = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => unreachable!("CoordInner owns a sender; something is wrong"),
-                Poll::Ready(Some(event)) => event,
-            };
+                Poll::Ready(None) => Err(CoordError::EventsClosed),
+                Poll::Ready(Some(event)) => Ok(event),
+            }?;
             match event {
                 Accepted(conn, ctrl, ibi, peer) => {
                     if self.clients.get(&peer).is_some() {
@@ -229,17 +232,17 @@ impl CoordInner {
             };
             accepted += 1;
             if accepted >= MAX_LOOPS {
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), CoordError> {
         loop {
             let mut keep_going = false;
             keep_going |= self.drive_accept(cx)?;
-            keep_going |= self.handle_events(cx);
+            keep_going |= self.handle_events(cx)?;
             if !keep_going {
                 return Ok(());
             }

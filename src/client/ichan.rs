@@ -73,6 +73,9 @@ pub enum IncomingChannelsError {
     /// Error handing off result to driver
     #[error(display = "Error sending to driver: {:?}", _0)]
     Driver(#[source] mpsc::SendError),
+    /// Events channel closed
+    #[error(display = "Events channel closed")]
+    EventsClosed,
 }
 
 /// Error variant when opening a new channel
@@ -187,9 +190,9 @@ impl IncomingChannelsInner {
         loop {
             let event = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => unreachable!("we own a sender"),
-                Poll::Ready(Some(event)) => event,
-            };
+                Poll::Ready(None) => Err(IncomingChannelsError::EventsClosed),
+                Poll::Ready(Some(event)) => Ok(event),
+            }?;
             match event {
                 Certificate(peer, cert) => {
                     self.certs.insert(peer, cert);
@@ -243,9 +246,9 @@ impl IncomingChannelsInner {
 
                     // save off channel and process any waiting events
                     use ChanHandle::*;
-                    match self.chans.insert(peer, ChanHandle::Connected(ClientClientChan(inner))) {
-                        None => unreachable!("lost Connecting(..) struct"),
-                        Some(Connected(_)) => unreachable!("got Connecting(..) after already connected"),
+                    match self.chans.insert(peer, Connected(ClientClientChan(inner))) {
+                        None => panic!("lost Connecting(..) struct"),
+                        Some(Connected(_)) => panic!("got cchan Connecting(..) after already connected"),
                         Some(Connecting(mut events)) => {
                             for event in events.drain(..) {
                                 self.sender
@@ -320,7 +323,7 @@ impl IncomingChannelsInner {
                                         if let Connected(_, _, _, _, handle) = e.into_inner() {
                                             handle.send(Err(NewChannelError::DriverPost)).ok();
                                         } else {
-                                            unreachable!();
+                                            unreachable!()
                                         }
                                     })
                                     .ok();

@@ -30,6 +30,8 @@ pub(super) enum BroadcastChanError {
     NoReceivers,
     #[error(display = "error receiving from client")]
     ClientRecv(#[source] std::io::Error),
+    #[error(display = "Event channel closed")]
+    EventsClosed,
 }
 
 pub(super) type BroadcastChanEvent = (OutStream, InStream);
@@ -50,9 +52,9 @@ impl BroadcastChanInner {
         loop {
             let (send, recv) = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
-                Poll::Ready(None) => unreachable!("BroadcastChanInner owns a sender; something is wrong"),
-                Poll::Ready(Some(event)) => event,
-            };
+                Poll::Ready(None) => Err(BroadcastChanError::EventsClosed),
+                Poll::Ready(Some(event)) => Ok(event),
+            }?;
             self.fanout.push(send, recv);
             accepted += 1;
             if accepted >= MAX_LOOPS {
@@ -250,7 +252,50 @@ impl Future for BcastSendFlushClose {
 
 // stream setup
 // [ incoming from clients ] -> SelectAll -> BcastFanout -> [ outgoing to clients ]
-type BcastFanin = stream::SelectAll<InStream>;
+
+// this is like a futures::stream::SelectAll, but it drops incoming streams when they produce an error
+struct BcastFanin(FuturesUnordered<stream::StreamFuture<InStream>>);
+
+impl BcastFanin {
+    fn new() -> Self {
+        Self(FuturesUnordered::new())
+    }
+
+    #[allow(dead_code)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn push(&mut self, recv: InStream) {
+        self.0.push(recv.into_future())
+    }
+}
+
+impl Stream for BcastFanin {
+    type Item = <InStream as Stream>::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        loop {
+            match self.0.poll_next_unpin(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some((None, _))) => (),
+                Poll::Ready(Some((Some(item), remaining))) => {
+                    if item.is_ok() {
+                        self.push(remaining);
+                    }
+                    return Poll::Ready(Some(item));
+                }
+            }
+        }
+    }
+}
+
 struct BcastFanout {
     recv: BcastFanin,
     ready: Vec<OutStream>,
@@ -263,7 +308,7 @@ struct BcastFanout {
 impl BcastFanout {
     fn new(send: OutStream, recv: InStream) -> Self {
         let recv = {
-            let mut tmp = stream::SelectAll::new();
+            let mut tmp = BcastFanin::new();
             tmp.push(recv);
             tmp
         };

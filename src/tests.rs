@@ -16,7 +16,7 @@ use crate::{
 
 use anyhow::Context;
 use bytes::Bytes;
-use futures::{future, prelude::*};
+use futures::{future, prelude::*, stream};
 use quinn::{Certificate, CertificateChain, PrivateKey};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -787,6 +787,174 @@ fn test_broadcast_receiver_close() {
 }
 
 #[test]
+fn test_broadcast_block_nonblock() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let (coord, _cinc) = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (mut client2, _inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 3
+        let (mut client3, _inc3) = {
+            let mut client_cfg = ClientConfig::new("client3".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 4
+        let (mut client4, _inc4) = {
+            let mut client_cfg = ClientConfig::new("client4".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 4);
+
+        // everyone connects to broadcast
+        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s3, mut r3) = client3.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s4, mut r4) = client4.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        assert_eq!(coord.num_broadcasts(), 1);
+
+        // send until broadcast blocks
+        let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
+        let mut count = 0;
+        loop {
+            let timeout = time::delay_for(Duration::from_millis(10));
+            let send = s1.send(to_send.clone());
+            match future::select(timeout, send).await {
+                future::Either::Left(_) => break,
+                future::Either::Right((r, _)) => r.unwrap(),
+            };
+            count += 1;
+            assert!(count < 1048576);
+        }
+        let count = count;
+        for _ in 0..count {
+            let rec1 = r1.try_next().await?.unwrap();
+            let rec2 = r2.try_next().await?.unwrap();
+            let rec3 = r3.try_next().await?.unwrap();
+            let rec4 = r4.try_next().await?.unwrap();
+            assert_eq!(rec1, to_send);
+            assert_eq!(rec2, to_send);
+            assert_eq!(rec3, to_send);
+            assert_eq!(rec4, to_send);
+        }
+
+        // now send 4 * count copies all at once
+        let handle = tokio::spawn(async move {
+            let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
+            let mut to_send = stream::repeat(to_send).take(4 * count).map(Ok);
+            s2.send_all(&mut to_send).await.ok();
+            s2
+        });
+        // read from 3 of the 4 until timeout
+        let mut count2 = 0;
+        loop {
+            let timeout = time::delay_for(Duration::from_millis(10));
+            let recv = r1.try_next();
+            match future::select(timeout, recv).await {
+                future::Either::Left(_) => break,
+                future::Either::Right((r, _)) => r.unwrap(),
+            };
+            let rec2 = r2.try_next().await?.unwrap();
+            assert_eq!(rec2, to_send);
+            let rec3 = r3.try_next().await?.unwrap();
+            assert_eq!(rec3, to_send);
+            count2 += 1;
+            assert!(count < 1048576);
+        }
+        let count2 = count2;
+        for _ in 0..count2 {
+            let rec = r4.try_next().await?.unwrap();
+            assert_eq!(rec, to_send);
+        }
+
+        // now read from all of them until we've received 4 * count total
+        for _ in 0..(4 * count - count2) {
+            for r in [&mut r4, &mut r3, &mut r2, &mut r1].iter_mut() {
+                let rec = r.try_next().await?.unwrap();
+                assert_eq!(rec, to_send);
+            }
+        }
+
+        // now use the nonblocking adapters for everything
+        let mut r1 = NonblockingInStream::new(r1);
+        let mut r2 = NonblockingInStream::new(r2);
+        let mut r3 = NonblockingInStream::new(r3);
+        let mut r4 = NonblockingInStream::new(r4);
+        for _ in 0..2 * count {
+            s3.send(to_send.clone()).await.unwrap();
+            s4.send(to_send.clone()).await.unwrap();
+        }
+        drop(s1);
+        handle.await.ok();
+        drop(s3);
+        drop(s4);
+        loop {
+            match r1.try_next().await {
+                Err(NonblockingInStreamError::Lagged(_)) => (),
+                Err(e) => panic!("{:?}", e),
+                Ok(Some(rec)) => assert_eq!(rec, to_send),
+                Ok(None) => break,
+            }
+        }
+        loop {
+            match r2.try_next().await {
+                Err(NonblockingInStreamError::Lagged(_)) => (),
+                Err(e) => panic!("{:?}", e),
+                Ok(Some(rec)) => assert_eq!(rec, to_send),
+                Ok(None) => break,
+            }
+        }
+        loop {
+            match r3.try_next().await {
+                Err(NonblockingInStreamError::Lagged(_)) => (),
+                Err(e) => panic!("{:?}", e),
+                Ok(Some(rec)) => assert_eq!(rec, to_send),
+                Ok(None) => break,
+            }
+        }
+        loop {
+            match r4.try_next().await {
+                Err(NonblockingInStreamError::Lagged(_)) => (),
+                Err(e) => panic!("{:?}", e),
+                Ok(Some(rec)) => assert_eq!(rec, to_send),
+                Ok(None) => break,
+            }
+        }
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
 fn test_channel_errors() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
@@ -952,6 +1120,7 @@ fn test_channel_close() {
         assert_eq!(to_send, rec);
 
         client.close_channel("client2".to_string()).await.unwrap();
+        time::delay_for(Duration::from_millis(20)).await;
         s12.send(to_send.clone())
             .await
             .expect_err("closed channel should kill stream");
@@ -1197,6 +1366,7 @@ fn test_client_cert_channel() {
         assert_eq!(to_send, rec);
 
         client.close_channel("client2".to_string()).await.unwrap();
+        time::delay_for(Duration::from_millis(20)).await;
         s12.send(to_send.clone())
             .await
             .expect_err("closed channel should kill stream");
@@ -1253,7 +1423,6 @@ fn test_reject_client_cert() {
 }
 
 #[test]
-#[ignore]
 fn test_keepalive() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
