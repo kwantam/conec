@@ -894,7 +894,6 @@ fn test_broadcast_block_nonblock() {
             let rec = r4.try_next().await?.unwrap();
             assert_eq!(rec, to_send);
         }
-
         // now read from all of them until we've received 4 * count total
         for _ in 0..(4 * count - count2) {
             for r in [&mut r4, &mut r3, &mut r2, &mut r1].iter_mut() {
@@ -903,17 +902,56 @@ fn test_broadcast_block_nonblock() {
             }
         }
 
+        // same as above, except this time r4 drops before reading anything --- should unblock others
+        let mut s2 = handle.await.unwrap();
+        let handle = tokio::spawn(async move {
+            let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
+            let mut to_send = stream::repeat(to_send).take(4 * count).map(Ok);
+            s2.send_all(&mut to_send).await.ok();
+            s2
+        });
+        // read from 3 of the 4 until timeout
+        let mut count2 = 0;
+        loop {
+            let timeout = time::delay_for(Duration::from_millis(100));
+            let recv = r1.try_next();
+            match future::select(timeout, recv).await {
+                future::Either::Left(_) => break,
+                future::Either::Right((r, _)) => r.unwrap(),
+            };
+            let rec2 = r2.try_next().await?.unwrap();
+            assert_eq!(rec2, to_send);
+            let rec3 = r3.try_next().await?.unwrap();
+            assert_eq!(rec3, to_send);
+            count2 += 1;
+            assert!(count < 1048576);
+        }
+        let count2 = count2;
+        drop(r4);
+        // now read from all of them until we've received 4 * count total
+        for _ in 0..(4 * count - count2) {
+            for r in [&mut r3, &mut r2, &mut r1].iter_mut() {
+                let timeout = time::delay_for(Duration::from_millis(100));
+                let recv = r.try_next(); //.await?.unwrap();
+                let rec = match future::select(timeout, recv).await {
+                    future::Either::Left(_) => panic!("unexpected timeout"),
+                    future::Either::Right((r, _)) => r?.unwrap(),
+                };
+                assert_eq!(rec, to_send);
+            }
+        }
+
         // now use the nonblocking adapters for everything
         let mut r1 = NonblockingInStream::new(r1);
         let mut r2 = NonblockingInStream::new(r2);
         let mut r3 = NonblockingInStream::new(r3);
-        let mut r4 = NonblockingInStream::new(r4);
         for _ in 0..2 * count {
             s3.send(to_send.clone()).await.unwrap();
             s4.send(to_send.clone()).await.unwrap();
         }
+        // end the stream --- nonblock adapters should also end
         drop(s1);
-        handle.await.ok();
+        handle.await.unwrap();
         drop(s3);
         drop(s4);
         loop {
@@ -934,14 +972,6 @@ fn test_broadcast_block_nonblock() {
         }
         loop {
             match r3.try_next().await {
-                Err(NonblockingInStreamError::Lagged(_)) => (),
-                Err(e) => panic!("{:?}", e),
-                Ok(Some(rec)) => assert_eq!(rec, to_send),
-                Ok(None) => break,
-            }
-        }
-        loop {
-            match r4.try_next().await {
                 Err(NonblockingInStreamError::Lagged(_)) => (),
                 Err(e) => panic!("{:?}", e),
                 Ok(Some(rec)) => assert_eq!(rec, to_send),
