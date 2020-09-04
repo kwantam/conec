@@ -31,7 +31,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 /// Receiving end of a data stream: a [Stream](futures::stream::Stream) of [BytesMut](bytes::BytesMut).
 pub type InStream = FramedRead<RecvStream, LengthDelimitedCodec>;
 
-/// Sending end of a data stream that accepts [Bytes](bytes::Bytes).
+/// Sending end of a data stream: a [Sink](futures::sink::Sink) that accepts [Bytes](bytes::Bytes).
 pub type OutStream = FramedWrite<SendStream, LengthDelimitedCodec>;
 
 pub(crate) async fn outstream_init(

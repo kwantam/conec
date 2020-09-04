@@ -7,19 +7,17 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::consts::{BCAST_QUEUE, MAX_LOOPS};
+use crate::consts::MAX_LOOPS;
 use crate::types::InStream;
 
-use arraydeque::{ArrayDeque, Wrapping};
 use bytes::BytesMut;
 use err_derive::Error;
 use futures::prelude::*;
+use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-
-type BytesMutQueue = ArrayDeque<[BytesMut; BCAST_QUEUE], Wrapping>;
 
 /// Err variant returned by NonblockingInStream
 #[derive(Debug, Error)]
@@ -39,6 +37,36 @@ pub enum NonblockingInStreamError {
 impl From<NonblockingInStreamError> for io::Error {
     fn from(err: NonblockingInStreamError) -> Self {
         io::Error::new(io::ErrorKind::Other, err)
+    }
+}
+
+struct BytesMutQueue {
+    queue: VecDeque<BytesMut>,
+    buflen: usize,
+}
+
+impl BytesMutQueue {
+    fn new(buflen: usize) -> Self {
+        let queue = VecDeque::with_capacity(buflen);
+        Self { queue, buflen }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    fn push_back(&mut self, msg: BytesMut) -> Option<BytesMut> {
+        let ret = if self.queue.len() >= self.buflen {
+            self.queue.pop_front()
+        } else {
+            None
+        };
+        self.queue.push_back(msg);
+        ret
+    }
+
+    fn pop_front(&mut self) -> Option<BytesMut> {
+        self.queue.pop_front()
     }
 }
 
@@ -105,10 +133,10 @@ impl NblkInStreamInner {
 
 def_ref!(NblkInStreamInner, NblkInStreamRef, pub(self));
 impl NblkInStreamRef {
-    fn new(recv: InStream) -> Self {
+    fn new(recv: InStream, buflen: usize) -> Self {
         Self(Arc::new(Mutex::new(NblkInStreamInner {
             recv,
-            queue: ArrayDeque::new(),
+            queue: BytesMutQueue::new(buflen),
             ref_count: 0,
             driver: None,
             lagged: 0,
@@ -122,9 +150,10 @@ def_driver!(pub(self), NblkInStreamRef; pub(self), NblkInStreamDriver; Nonblocki
 
 /// An adapter to make an InStream non-blocking from the sender's perspective
 ///
-/// By default, OutStreams are blocking: receiving client(s) must receive a message before
-/// the next message can be sent. This can produce undesirable behavior, especially with
-/// broadcast streams where some clients are slow to read.
+/// By default, OutStreams are blocking: receiving client(s) have finite buffering, and
+/// once it is full they must drain the buffer before another message can be sent. This
+/// can produce undesirable behavior, especially with broadcast streams where some clients
+/// are slow to read.
 ///
 /// This adapter can be used to prevent the slow receiver problem. Specifically, any client
 /// that wraps an InStream with this adapter will automatically read messages into
@@ -139,13 +168,14 @@ def_driver!(pub(self), NblkInStreamRef; pub(self), NblkInStreamDriver; Nonblocki
 /// nonblocking.
 ///
 /// This adapter is compatible with tokio-serde's Framed struct, and in particular it should
-/// work with any of the tokio_serde::formats codecs. See `tests.rs` for an example.
+/// work with any of the tokio_serde::formats codecs. See `tests.rs` and the [crate-level
+/// documentation](index.html#making-streams-non-blocking) for examples.
 pub struct NonblockingInStream(NblkInStreamRef);
 
 impl NonblockingInStream {
-    /// Create a new NonblockingInStream from an InStream
-    pub fn new(recv: InStream) -> Self {
-        let inner = NblkInStreamRef::new(recv);
+    /// Create a new NonblockingInStream from an InStream, with a buffer of size `buflen`
+    pub fn new(recv: InStream, buflen: usize) -> Self {
+        let inner = NblkInStreamRef::new(recv, buflen);
         let driver = NblkInStreamDriver(inner.clone());
         tokio::spawn(async move { driver.await });
         Self(inner)

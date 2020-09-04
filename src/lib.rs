@@ -32,6 +32,8 @@ A data stream accepts a sequence of messages from its writer. The data
 stream's reader receives these messages in order. The stream handles
 all message framing: a read yields a full message or nothing. There
 is no support for out-of-order reads; use multiple data streams instead.
+For more information on sending values over streams, see [Stream
+Adapters](#stream-adapters), below.
 
 # Quickstart
 
@@ -67,7 +69,8 @@ clients have disconnected.
 
 Coord is a future that returns only if an error occurs. It is *not*
 necessary to await this future for the coordinator to run, but you
-shouldn't drop the Coord object if you want the Coordinator to run!
+shouldn't drop the Coord object unless you want the Coordinator to
+stop executing!
 
 ## Client
 
@@ -143,7 +146,7 @@ For the coordinator, the first element of the returned 4-tuple is a
 [String] rather than an [Option], since all incoming streams
 must be from clients.
 
-## Authentication
+# Authentication
 
 Upon connecting, Clients require Coordinator to furnish a TLS certificate
 that is valid for the hostname specified by the `coord` argument to
@@ -175,6 +178,79 @@ using self-signed Client certificates.
 channels from other Clients **must** set the same Client CA via
 [ClientConfig::set_client_ca].
 
+# Stream adapters
+
+In conec, bi-directional streams are represented by a reader/writer pair,
+[InStream] and [OutStream]. InStream is a [TryStream](futures::stream::TryStream)
+that outputs items of type [BytesMut](bytes::BytesMut); OutStream is a
+[Sink](futures::sink::Sink) that accepts items of type [Bytes](bytes::Bytes).
+
+## Sending typed values over a stream
+
+Both InStream and OutStream can be adapted to accept values of another type,
+using [tokio_serde]'s [SymmetricallyFramed](tokio_serde::SymmetricallyFramed)
+adapter. This requires the type being written to or read from the channel to
+implement the [Serialize](serde::Serialize) and [Deserialize](serde::Deserialize)
+traits (these can often be `Derive`d; see the [serde] documentation for more info).
+For example:
+
+```ignore
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+enum MyType {
+    Variant1,
+    Variant2,
+}
+
+// open a loopback stream
+let (send, recv) = client.new_stream("client".to_string()).await.unwrap();
+
+// wrap send and recv in a codec
+let send_mytype = SymmetricallyFramed::new(send, SymmetricalBincode::<MyType>::default());
+let recv_mytype = SymmetricallyFramed::new(recv, SymmetricalBincode::<MyType>::default());
+
+// send a type and receive the same type back
+send_mytype.send(MyType::Variant1).await.unwrap();
+assert_eq!(recv_mytype.try_next().await?.unwrap(), MyType::Variant1);
+```
+
+## Making streams non-blocking
+
+By default, messages are queued until the receiver reads them from an InStream.
+The underlying network transport implements buffering, which allows the sender
+to transmit messages even when the receiver does not read them immediately.
+This buffering is finite, however; when it is full, the transport layer
+applies back-pressure, blocking the sender from transmitting new messages
+until the receiver has consumed buffered ones.
+
+In some cases---especially for [broadcast streams](Client::new_broadcast)---it
+may be useful to make streams non-blocking, at the cost of forcing slow
+receivers to drop messages. The [NonblockingInStream] adapter implements
+this at the receiver. Like InStream, NonblockingInStream can be composed
+with [tokio_serde]'s [SymmetricallyFramed](tokio_serde::SymmetricallyFramed)
+adapter:
+
+```ignore
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+enum MyType {
+    Variant1,
+    Variant2,
+}
+
+// open a stream to another client
+let (send, recv) = client.new_stream("client2".to_string()).await.unwrap();
+
+// wrap recv in a codec and make sure it does not block sender
+let recv = NonblockingInStream::new(recv, 16);
+let recv_mytype = SymmetricallyFramed::new(recv, SymmetricalBincode::<MyType>::default());
+
+match recv_mytype.try_next().await {
+    Err(NonblockingInStreamError::Lagged(nlost)) => println!("lost {} messages", nlost),
+    Err(_) => panic!("unknown error"),
+    Ok(Some(msg)) => println!("received {:?}", msg),
+    Ok(None) => println!("stream is closed now"),
+};
+```
+
 */
 
 #[macro_use]
@@ -188,7 +264,11 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use client::{config::ClientConfig, Client};
+pub use client::{
+    config::ClientConfig,
+    nbistream::{NonblockingInStream, NonblockingInStreamError},
+    Client,
+};
 pub use coord::{config::CoordConfig, Coord};
 pub use types::{InStream, OutStream};
 
@@ -198,7 +278,6 @@ mod consts {
     pub(crate) const MAX_LOOPS: usize = 8;
     pub(crate) const VERSION: &str = "CONEC_V0.0.10";
     pub(crate) const STRICT_CTRL: bool = true;
-    pub(crate) const BCAST_QUEUE: usize = 16;
 }
 
 /// Re-exports from quinn

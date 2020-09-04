@@ -18,7 +18,7 @@ pub(crate) mod chan;
 pub(crate) mod config;
 mod ichan;
 mod istream;
-mod nbistream;
+pub(crate) mod nbistream;
 mod tls;
 
 use crate::consts::ALPN_CONEC;
@@ -32,7 +32,6 @@ pub use ichan::{ClosingChannel, IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream, StreamId};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
-pub use nbistream::{NonblockingInStream, NonblockingInStreamError};
 
 use err_derive::Error;
 use futures::channel::mpsc;
@@ -239,8 +238,13 @@ impl Client {
 
     /// Open or connect to a broadcast stream
     ///
-    /// A broadcast channel is a many-to-many stream proxied through the Coordinator.
+    /// A broadcast stream is a many-to-many stream proxied through the Coordinator.
     /// Any Client who knows the stream's name can send to and receive from it.
+    ///
+    /// Broadcast streams may suffer from the slow receiver problem: senders cannot
+    /// make progress until the slowest receiver drains its incoming buffer. The
+    /// [NonblockingInStream](crate::NonblockingInStream) adapter may help to address
+    /// this issue.
     pub fn new_broadcast(&mut self, chan: String) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;

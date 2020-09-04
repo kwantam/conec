@@ -9,9 +9,8 @@
 
 use crate::{
     ca::{generate_ca, generate_cert},
-    client::{NewInStream, NonblockingInStream, NonblockingInStreamError, StreamId},
-    consts::BCAST_QUEUE,
-    Client, ClientConfig, Coord, CoordConfig,
+    client::{NewInStream, StreamId},
+    Client, ClientConfig, Coord, CoordConfig, NonblockingInStream, NonblockingInStreamError,
 };
 
 use anyhow::Context;
@@ -229,9 +228,11 @@ fn test_stream_block_nonblock() {
 
         assert_eq!(coord.num_clients(), 2);
 
+        const BCAST_QUEUE: usize = 16;
+
         // open stream to client2, make input nonblocking
         let (mut s12, r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
-        let mut r21 = NonblockingInStream::new(r21);
+        let mut r21 = NonblockingInStream::new(r21, BCAST_QUEUE);
         // receive stream at client2
         let (mut s21, mut r12) = match inc2.next().await.unwrap() {
             NewInStream::Client(_, _, s21, r12) => (s21, r12),
@@ -631,7 +632,7 @@ fn test_broadcast_codec() {
         // open broadcast streams and wrap in codec
         let (s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
         let mut s1 = SymmetricallyFramed::new(s1, SymmetricalBincode::<TestValues>::default());
-        let r1 = NonblockingInStream::new(r1);
+        let r1 = NonblockingInStream::new(r1, 16);
         let mut r1 = SymmetricallyFramed::new(r1, SymmetricalBincode::<TestValues>::default());
 
         let (s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
@@ -942,9 +943,9 @@ fn test_broadcast_block_nonblock() {
         }
 
         // now use the nonblocking adapters for everything
-        let mut r1 = NonblockingInStream::new(r1);
-        let mut r2 = NonblockingInStream::new(r2);
-        let mut r3 = NonblockingInStream::new(r3);
+        let mut r1 = NonblockingInStream::new(r1, 4);
+        let mut r2 = NonblockingInStream::new(r2, 4);
+        let mut r3 = NonblockingInStream::new(r3, 4);
         for _ in 0..2 * count {
             s3.send(to_send.clone()).await.unwrap();
             s4.send(to_send.clone()).await.unwrap();
