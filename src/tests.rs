@@ -1488,6 +1488,31 @@ fn check_version() {
     assert_eq!(crate::consts::VERSION, &format!("CONEC_V{}", env!("CARGO_PKG_VERSION")));
 }
 
+#[test]
+fn test_bincode() {
+    use bytes::{BufMut, BytesMut};
+    use std::io::Cursor;
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+    enum TestValues {
+        ValueOne,
+        ValueTwo,
+    }
+
+    // serialize a value, then pack a string onto the end of it
+    let mut buf = BytesMut::with_capacity(1024);
+    buf.put(bincode::serialize(&TestValues::ValueOne).unwrap().as_ref());
+    let id_ser: Bytes = bincode::serialize("this is my identity").unwrap().into();
+    buf.put(id_ser.as_ref());
+
+    let buf = buf.freeze();
+    let mut cur = Cursor::new(buf.as_ref());
+
+    println!("{:?}", bincode::deserialize_from::<_, TestValues>(&mut cur));
+    println!("{:?}", bincode::deserialize_from::<_, String>(&mut cur));
+    assert_eq!(cur.position() as usize, buf.len());
+}
+
 fn get_cert_paths() -> (PathBuf, PathBuf) {
     let dir = directories_next::ProjectDirs::from("am.kwant", "conec", "conec-tests").unwrap();
     let path = dir.data_local_dir();
