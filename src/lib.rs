@@ -329,6 +329,7 @@ pub use client::{config::ClientConfig, Client};
 pub use coord::{config::CoordConfig, Coord};
 pub use types::{
     nbistream::{NonblockingInStream, NonblockingInStreamError},
+    tagstream::{TaglessBroadcastInStream, TaglessBroadcastInStreamError},
     InStream, OutStream,
 };
 

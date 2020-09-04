@@ -12,6 +12,7 @@
 mod conn;
 mod ctrlstream;
 pub(crate) mod nbistream;
+pub(crate) mod tagstream;
 
 pub(crate) use conn::ConecConn;
 pub use conn::ConecConnError;
