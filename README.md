@@ -74,7 +74,7 @@
     - [ ] Broadcast: identify the sending client?
         - reason to do this in the protocol: tie into client authentication
         - reason not to do this in the protocol: makes stacking adapters harder...
-        - alternative: allow both?
+        - alternative: allow both? let *client* choose?
     - [ ] add intf to automagically pick between client-to-client and proxied streams
         - super magical version: automatically initiate a new client channel
         - less magical version: only use client channel if one is already open
