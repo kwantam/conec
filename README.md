@@ -67,7 +67,10 @@
         - [x] allow Client to close a channel to another client
             - seems like there is a bug somewhere---possibly in quinn or rustls---that close/reopen triggers
             - [ ] investigate this bug!
-    - [x] broadcast channels
+    - [x] broadcast streams for Clients
+    - [ ] broadcast streams for Coordinator?
+        - alternative: just connect a Client --- simplifies broadcast impl
+        - in the alternative case, remove Coordinator-side stream support? (just use Client)
     - [ ] add intf to automagically pick between client-to-client and proxied streams
         - super magical version: automatically initiate a new client channel
         - less magical version: only use client channel if one is already open
