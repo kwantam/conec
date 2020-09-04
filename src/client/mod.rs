@@ -18,7 +18,6 @@ pub(crate) mod chan;
 pub(crate) mod config;
 mod ichan;
 mod istream;
-pub(crate) mod nbistream;
 mod tls;
 
 use crate::consts::ALPN_CONEC;

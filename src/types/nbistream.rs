@@ -7,8 +7,8 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use super::InStream;
 use crate::consts::MAX_LOOPS;
-use crate::types::InStream;
 
 use bytes::BytesMut;
 use err_derive::Error;

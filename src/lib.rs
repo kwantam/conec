@@ -325,13 +325,12 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use client::{
-    config::ClientConfig,
-    nbistream::{NonblockingInStream, NonblockingInStreamError},
-    Client,
-};
+pub use client::{config::ClientConfig, Client};
 pub use coord::{config::CoordConfig, Coord};
-pub use types::{InStream, OutStream};
+pub use types::{
+    nbistream::{NonblockingInStream, NonblockingInStreamError},
+    InStream, OutStream,
+};
 
 mod consts {
     pub(crate) const DFLT_PORT: u16 = 1719;
