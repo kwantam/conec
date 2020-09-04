@@ -15,6 +15,7 @@ among many Clients, facilitated by one Coordinator.
 Clients are assumed to know (e.g., by configuration or service discovery)
 the hostname and port number of Coordinator. Coordinator is assumed to have
 a TLS certificate for this hostname issued by a CA that Clients trust.
+For more information, see [Authentication](#authentication), below.
 
 The basic abstraction is a channel, which connects two entities (Client
 or Coordinator). Every Client shares a channel with Coordinator: at
@@ -141,6 +142,39 @@ let (peer, strmid, _to_client, mut from_client) = coord_istreams
 For the coordinator, the first element of the returned 4-tuple is a
 [String] rather than an [Option], since all incoming streams
 must be from clients.
+
+## Authentication
+
+Upon connecting, Clients require Coordinator to furnish a TLS certificate
+that is valid for the hostname specified by the `coord` argument to
+[ClientConfig::new]. By default, Clients use the system's CA store to validate
+Coordinator's certificate. Coordinator can use a certificate that is self-signed
+or signed by a local CA provided that Clients pass the signing certificate
+to [ClientConfig::set_ca]. See `tests.rs` for examples of using self-signed
+and locally signed Coordinator certificates.
+
+Clients also use TLS certificates to authenticate with Coordinator. By default,
+Coordinator will accept a self-signed certificate provided that it is valid for
+a name that matches the `id` argument furnished to [ClientConfig::new]; Clients
+automatically generate such certificates prior to connecting to Coordinator.
+
+It is possible to instead require clients to present a certificate signed
+by a specified CA, using the [CoordConfig::set_client_ca] method. In this
+configuration, self-signed certificates are not accepted. This can be used
+to implement access control: Clients may only connect to Coordinator if they
+have a certificate signed by the correct CA and valid for their `id`.
+
+Before a Client establishes a new channel directly to another Client, each
+Client first learns the other's certificate from Coordinator. Upon connecting,
+both Clients check that the new peer's certificate matches the one Coordinator
+provided. This ensures that Clients connect to the correct entities, even when
+using self-signed Client certificates.
+
+**Important:** when Coordinator is configured to use a Client CA via
+[CoordConfig::set_client_ca], all Clients that wish to accept direct
+channels from other Clients **must** set the same Client CA via
+[ClientConfig::set_client_ca].
+
 */
 
 #[macro_use]
