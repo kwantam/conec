@@ -91,7 +91,9 @@ when forced:
 let (client, istreams) = Client::new(client_cfg).await.unwrap();
 ```
 
-# Streams
+# Channels and streams
+
+## Proxied streams
 
 Once your Client has connected to its Coordinator, it can set up
 data streams with the Coordinator or other Clients, and send data on
@@ -99,7 +101,7 @@ those streams:
 
 ```ignore
 let (mut to_client2, _from_client2) = client
-    .new_stream("client2".to_string())
+    .new_proxied_stream("client2".to_string())
     .await
     .unwrap();
 to_client2.send(Bytes::from("hi there")).await.unwrap();
@@ -122,11 +124,11 @@ let rec = from_client1
 
 The first element of the returned 4-tuple will be `Some(<name>)` when the
 peer is a Client called `<name>`, or `None` when the peer is the Coordinator.
-To open a stream to the Coordinator, pass `None` to `new_stream`:
+To open a stream to the Coordinator, pass `None` to `new_proxied_stream`:
 
 ```ignore
 let (mut to_coord, _from_coord) = client
-    .new_stream(None)   // NOTE: None means open stream to Coordinator
+    .new_proxied_stream(None)   // NOTE: None means open stream to Coordinator
     .await
     .unwrap();
 to_coord.send(Bytes::from("hi coordinator")).await.unwrap();
@@ -145,6 +147,65 @@ let (peer, strmid, _to_client, mut from_client) = coord_istreams
 For the coordinator, the first element of the returned 4-tuple is a
 [String] rather than an [Option], since all incoming streams
 must be from clients.
+
+## Direct streams
+
+Clients can initiate direct connections to one another with [Client::new_channel],
+after which they can initiate direct streams to the peer.
+
+```ignore
+// first, connect a new channel to client2
+client1.new_channel("client2".to_string()).await.unwrap();
+
+// then open a direct stream
+let (mut to_client2, _from_client2) = client1
+    .new_direct_stream("client2".to_string())
+    .await
+    .unwrap();
+to_client2.send(Bytes::from("hi there")).await.unwrap();
+```
+
+Once two clients share a channel, either client can initiate a direct stream
+to the other. [Client::close_channel] closes the channel, which ends all
+of the direct streams between the two clients.
+
+## Broadcast streams
+
+Clients can open broadcast streams, which allow many peers to send and receive
+simultaneously. In this version of Conec, Coordinator cannot participate in
+broadcast streams. This may change in a future version; until then, one can
+start a local Client and broadcast from there.
+
+Clients open a new broadcast stream with [Client::new_broadcast]. Every client
+that supplies a given `chan` argument to [Client::new_broadcast] connects to
+the same broadcast stream.
+
+**Notes**:
+
+- Clients receive the messages they send to the broadcast stream.
+- Messages received from the broadcast stream do not identify their sender.
+  (This may change in a future version of Conec.)
+
+```ignore
+let (mut s1, mut r1) = client1
+    .new_broadcast("test_broadcast_chan".to_string())
+    .await
+    .unwrap();
+let (mut s2, mut r2) = client2
+    .new_broadcast("test_broadcast_chan".to_string())
+    .await
+    .unwrap();
+
+s1.send(Bytes::from("test test test")).await.unwrap();
+let rec1 = r1.try_next().await?.unwrap();
+let rec2 = r2.try_next().await?.unwrap();
+assert_eq!(rec1, rec2);
+
+s2.send(Bytes::from("sibilance")).await.unwrap();
+let rec1 = r1.try_next().await?.unwrap();
+let rec2 = r2.try_next().await?.unwrap();
+assert_eq!(rec1, rec2);
+```
 
 # Authentication
 
