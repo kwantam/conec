@@ -1490,8 +1490,9 @@ fn check_version() {
 
 #[test]
 fn test_bincode() {
-    use bytes::{BufMut, BytesMut};
+    use bytes::{Buf, BufMut, BytesMut};
     use std::io::Cursor;
+    use std::str::from_utf8;
 
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
     enum TestValues {
@@ -1499,18 +1500,28 @@ fn test_bincode() {
         ValueTwo,
     }
 
-    // serialize a value, then pack a string onto the end of it
+    // serialize a value, then pack a string onto the end of it with length as suffix
     let mut buf = BytesMut::with_capacity(1024);
     buf.put(bincode::serialize(&TestValues::ValueOne).unwrap().as_ref());
-    let id_ser: Bytes = bincode::serialize("this is my identity").unwrap().into();
-    buf.put(id_ser.as_ref());
+    let id = String::from("this is my identity");
+    let id_buf = {
+        let id_len = id.len();
+        let mut tmp = id.into_bytes();
+        tmp.put_u32(id_len as u32);
+        tmp
+    };
+    buf.put(id_buf.as_ref());
 
     let buf = buf.freeze();
-    let mut cur = Cursor::new(buf.as_ref());
+    let buf_len = buf.len();
+    let id_len = (&buf[buf_len - 4..]).get_u32() as usize;
+    assert!(buf_len >= id_len + 4);
+    let id = String::from(from_utf8(&buf[buf_len - 4 - id_len..buf_len - 4]).unwrap());
 
-    println!("{:?}", bincode::deserialize_from::<_, TestValues>(&mut cur));
-    println!("{:?}", bincode::deserialize_from::<_, String>(&mut cur));
-    assert_eq!(cur.position() as usize, buf.len());
+    let mut cur = Cursor::new(buf.as_ref());
+    println!("{:?}", bincode::deserialize_from::<_, TestValues>(&mut cur).unwrap());
+    println!("{}", id);
+    assert_eq!(cur.position() as usize + id_len + 4, buf_len);
 }
 
 fn get_cert_paths() -> (PathBuf, PathBuf) {
