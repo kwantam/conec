@@ -79,7 +79,7 @@
           for most cases that are not symmetric NATs.
         - even without this, full-cone NAT traversal will already work
     - [ ] more `tracing`
-    - [ ] check drop notifications for critical pieces of Coord/Chan
+    - [ ] carefully recheck drop notifications for critical pieces of Coord/Chan
 - questions / maybes
     - [x] Client driver - what is the API for this? one driver for whole client?
     - [x] better Client naming (name by pubkey? but only if not ephemeral...)
