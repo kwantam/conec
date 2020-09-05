@@ -315,12 +315,13 @@ match recv_mytype.try_next().await {
 */
 
 #[macro_use]
-mod util;
+mod macros;
 
 pub mod ca;
 pub mod client;
 pub mod coord;
 mod types;
+mod util;
 
 #[cfg(test)]
 mod tests;

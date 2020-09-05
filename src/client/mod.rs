@@ -64,6 +64,7 @@ pub enum ClientError {
     #[error(display = "Starting new stream: {:?}", _0)]
     NewStream(#[source] ClientChanError),
 }
+def_into_error!(ClientError);
 
 /// The Client end of a connection to the Coordinator
 ///

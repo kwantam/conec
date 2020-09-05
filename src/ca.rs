@@ -28,6 +28,7 @@ pub enum CertAuthError {
     #[error(display = "Error generating key")]
     KeyGen(#[source] RcgenError),
 }
+def_into_error!(CertAuthError);
 
 /// Generate a new CA certificate for use with CONEC
 pub fn generate_ca() -> Result<Certificate, CertAuthError> {

@@ -64,6 +64,7 @@ pub enum CoordChanError {
     #[error(display = "Events channel closed")]
     EventsClosed,
 }
+def_into_error!(CoordChanError);
 
 pub(super) struct CoordChanInner {
     conn: ConecConn,

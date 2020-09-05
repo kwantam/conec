@@ -42,6 +42,7 @@ pub enum ConecConnError {
     #[error(display = "Receiving hello: {:?}", _0)]
     RecvHello(#[error(source, no_from)] CtrlStreamError),
 }
+def_into_error!(ConecConnError);
 
 pub(crate) struct ConecConn {
     conn: Connection,

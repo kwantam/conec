@@ -57,6 +57,7 @@ pub enum ClientChanError {
     #[error(display = "Keepalive timer disappered unexpectedly")]
     KeepaliveTimer,
 }
+def_into_error!(ClientChanError);
 
 def_cs_future!(
     ConnectingChannel,

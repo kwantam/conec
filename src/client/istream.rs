@@ -83,6 +83,7 @@ pub enum IncomingStreamsError {
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
 }
+def_into_error!(IncomingStreamsError);
 
 pub(super) struct IncomingStreamsInner {
     ibi: IncomingBiStreams,

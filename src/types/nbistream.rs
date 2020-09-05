@@ -32,13 +32,7 @@ pub enum NonblockingInStreamError {
     #[error(display = "Codec error: {:?}", _0)]
     Codec(#[source] io::Error),
 }
-
-// this is needed for doing recv.try_next().await?
-impl From<NonblockingInStreamError> for io::Error {
-    fn from(err: NonblockingInStreamError) -> Self {
-        io::Error::new(io::ErrorKind::Other, err)
-    }
-}
+def_into_error!(NonblockingInStreamError);
 
 struct BytesMutQueue {
     queue: VecDeque<BytesMut>,

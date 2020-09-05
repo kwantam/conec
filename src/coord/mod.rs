@@ -72,6 +72,7 @@ pub enum CoordError {
     #[error(display = "Events channel closed")]
     EventsClosed,
 }
+def_into_error!(CoordError);
 
 enum CoordEvent {
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),

@@ -51,6 +51,7 @@ pub enum ClosingChannelError {
     #[error(display = "Could not send event")]
     Event,
 }
+def_into_error!(ClosingChannelError);
 
 /// Error variant output by the IncomingChannels driver
 #[derive(Debug, Error)]
@@ -77,6 +78,7 @@ pub enum IncomingChannelsError {
     #[error(display = "Events channel closed")]
     EventsClosed,
 }
+def_into_error!(IncomingChannelsError);
 
 /// Error variant when opening a new channel
 #[derive(Debug, Error)]
@@ -115,6 +117,7 @@ pub enum NewChannelError {
     #[error(display = "Duplicate channel peer")]
     Duplicate,
 }
+def_into_error!(NewChannelError);
 
 pub(super) enum IncomingChannelsEvent {
     Certificate(String, Vec<u8>),

@@ -130,6 +130,7 @@ pub enum OutStreamError {
     #[error(display = "Stream initialization: {:?}", _0)]
     InitStream(#[source] io::Error),
 }
+def_into_error!(OutStreamError);
 
 def_cs_future!(
     ConnectingOutStream,

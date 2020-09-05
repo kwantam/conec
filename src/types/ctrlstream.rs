@@ -69,6 +69,7 @@ pub enum CtrlStreamError {
     #[error(display = "Bad client auth message")]
     ClientName(#[source] webpki::InvalidDNSNameError),
 }
+def_into_error!(CtrlStreamError);
 
 type CtrlRecvStream = SymmetricallyFramed<InStream, ControlMsg, SymmetricalBincode<ControlMsg>>;
 type CtrlSendStream = SymmetricallyFramed<OutStream, ControlMsg, SymmetricalBincode<ControlMsg>>;

@@ -43,6 +43,7 @@ pub enum CertGenError {
     #[error(display = "Parsing secret key: {:?}", _0)]
     Parse(#[source] ParseError),
 }
+def_into_error!(CertGenError);
 
 impl ClientConfig {
     /// Construct new ClientConfig

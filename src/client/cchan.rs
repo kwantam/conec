@@ -54,6 +54,7 @@ pub enum ClientClientChanError {
     #[error(display = "Accepting Bi stream: {:?}", _0)]
     AcceptBiStream(#[source] ConnectionError),
 }
+def_into_error!(ClientClientChanError);
 
 pub(super) struct ClientClientChanInner {
     conn: ConecConn,

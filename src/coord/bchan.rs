@@ -33,6 +33,7 @@ pub(super) enum BroadcastChanError {
     #[error(display = "Event channel closed")]
     EventsClosed,
 }
+def_into_error!(BroadcastChanError);
 
 pub(super) type BroadcastChanEvent = (OutStream, TaggedInStream);
 
