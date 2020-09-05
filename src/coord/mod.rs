@@ -20,8 +20,8 @@ mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{
-    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream,
-    OutStream, OutStreamError,
+    tagstream::TaggedInStream, ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle,
+    ControlMsg, CtrlStream, OutStream, OutStreamError,
 };
 use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanRef};
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
@@ -83,7 +83,7 @@ enum CoordEvent {
     NewChannelReq(String, String, u32, Vec<u8>),
     NewChannelRes(String, u32, SocketAddr, Vec<u8>),
     NewChannelErr(String, u32),
-    NewBroadcastReq(String, OutStream, InStream),
+    NewBroadcastReq(String, OutStream, TaggedInStream),
 }
 
 struct CoordInner {

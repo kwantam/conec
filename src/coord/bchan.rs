@@ -9,7 +9,7 @@
 
 use super::CoordEvent;
 use crate::consts::MAX_LOOPS;
-use crate::types::{InStream, OutStream};
+use crate::types::{tagstream::TaggedInStream, OutStream};
 
 use bytes::Bytes;
 use err_derive::Error;
@@ -34,7 +34,7 @@ pub(super) enum BroadcastChanError {
     EventsClosed,
 }
 
-pub(super) type BroadcastChanEvent = (OutStream, InStream);
+pub(super) type BroadcastChanEvent = (OutStream, TaggedInStream);
 
 pub(super) struct BroadcastChanInner {
     chan: String,
@@ -89,7 +89,7 @@ impl BroadcastChanRef {
         chan: String,
         coord: mpsc::UnboundedSender<CoordEvent>,
         send: OutStream,
-        recv: InStream,
+        recv: TaggedInStream,
     ) -> (Self, mpsc::UnboundedSender<BroadcastChanEvent>) {
         let (sender, events) = mpsc::unbounded();
         let fanout = BcastFanout::new(send, recv);
@@ -132,7 +132,7 @@ pub(super) struct BroadcastChan {
 }
 
 impl BroadcastChan {
-    pub(super) fn new_broadcast(&self, send: OutStream, recv: InStream) {
+    pub(super) fn new_broadcast(&self, send: OutStream, recv: TaggedInStream) {
         self.sender.unbounded_send((send, recv)).ok();
     }
 }
@@ -251,7 +251,7 @@ impl Future for BcastSendFlushClose {
 }
 
 // this is like a futures::stream::SelectAll, but it drops incoming streams when they produce an error
-struct BcastFanin(FuturesUnordered<stream::StreamFuture<InStream>>);
+struct BcastFanin(FuturesUnordered<stream::StreamFuture<TaggedInStream>>);
 
 impl BcastFanin {
     fn new() -> Self {
@@ -268,13 +268,13 @@ impl BcastFanin {
         self.0.is_empty()
     }
 
-    fn push(&mut self, recv: InStream) {
+    fn push(&mut self, recv: TaggedInStream) {
         self.0.push(recv.into_future())
     }
 }
 
 impl Stream for BcastFanin {
-    type Item = <InStream as Stream>::Item;
+    type Item = <TaggedInStream as Stream>::Item;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         loop {
@@ -303,7 +303,7 @@ struct BcastFanout {
 }
 
 impl BcastFanout {
-    fn new(send: OutStream, recv: InStream) -> Self {
+    fn new(send: OutStream, recv: TaggedInStream) -> Self {
         let recv = {
             let mut tmp = BcastFanin::new();
             tmp.push(recv);
@@ -324,7 +324,7 @@ impl BcastFanout {
         }
     }
 
-    fn push(&mut self, send: OutStream, recv: InStream) {
+    fn push(&mut self, send: OutStream, recv: TaggedInStream) {
         self.waiting.push(BcastSendReady::new(send));
         self.recv.push(recv);
     }

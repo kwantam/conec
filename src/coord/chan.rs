@@ -10,8 +10,8 @@
 use super::CoordEvent;
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{
-    outstream_init, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream, InStream, OutStream,
-    OutStreamError, StreamPeer, StreamTo,
+    outstream_init, tagstream::TaggedInStream, ConecConn, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
+    InStream, OutStream, OutStreamError, StreamPeer, StreamTo,
 };
 use crate::util;
 
@@ -196,13 +196,14 @@ impl CoordChanInner {
                 NCRes(sid, addr, cert) => self.to_send.push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
                 BiIn(sid, n_send, n_recv) => match sid {
                     StreamTo::Broadcast(sid) => {
+                        let tagged_recv = TaggedInStream::new(n_recv, self.peer.clone());
                         let res = self
                             .new_broadcasts
                             .remove(&sid)
                             .ok_or(CoordChanError::UnknownSid)
                             .and_then(|chan| {
                                 self.coord
-                                    .unbounded_send(CoordEvent::NewBroadcastReq(chan, n_send, n_recv))
+                                    .unbounded_send(CoordEvent::NewBroadcastReq(chan, n_send, tagged_recv))
                                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error()))
                             });
                         if res.is_err() {

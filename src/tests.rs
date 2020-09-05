@@ -11,6 +11,7 @@ use crate::{
     ca::{generate_ca, generate_cert},
     client::{NewInStream, StreamId},
     Client, ClientConfig, Coord, CoordConfig, NonblockingInStream, NonblockingInStreamError,
+    TaglessBroadcastInStream,
 };
 
 use anyhow::Context;
@@ -513,7 +514,8 @@ fn test_broadcast_loopback() {
         assert_eq!(coord.num_clients(), 1);
 
         // open broadcast stream
-        let (mut s11, mut r11) = client.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s11, r11) = client.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r11 = TaglessBroadcastInStream::new(r11);
 
         let to_send = Bytes::from("loopback broadcast");
         s11.send(to_send.clone()).await.unwrap();
@@ -557,8 +559,10 @@ fn test_broadcast_bidi() {
         assert_eq!(coord.num_clients(), 2);
 
         // open broadcast streams
-        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r1 = TaglessBroadcastInStream::new(r1);
+        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
@@ -689,8 +693,10 @@ fn test_broadcast_sender_close() {
         assert_eq!(coord.num_clients(), 2);
 
         // open broadcast streams
-        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r1 = TaglessBroadcastInStream::new(r1);
+        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
@@ -751,8 +757,10 @@ fn test_broadcast_receiver_close() {
         assert_eq!(coord.num_clients(), 2);
 
         // open broadcast streams
-        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r1 = TaglessBroadcastInStream::new(r1);
+        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
@@ -836,10 +844,14 @@ fn test_broadcast_block_nonblock() {
         assert_eq!(coord.num_clients(), 4);
 
         // everyone connects to broadcast
-        let (mut s1, mut r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s2, mut r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s3, mut r3) = client3.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let (mut s4, mut r4) = client4.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r1 = TaglessBroadcastInStream::new(r1);
+        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r2 = TaglessBroadcastInStream::new(r2);
+        let (mut s3, r3) = client3.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r3 = TaglessBroadcastInStream::new(r3);
+        let (mut s4, r4) = client4.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let mut r4 = TaglessBroadcastInStream::new(r4);
         assert_eq!(coord.num_broadcasts(), 1);
 
         // send until broadcast blocks
@@ -943,9 +955,9 @@ fn test_broadcast_block_nonblock() {
         }
 
         // now use the nonblocking adapters for everything
-        let mut r1 = NonblockingInStream::new(r1, 4);
-        let mut r2 = NonblockingInStream::new(r2, 4);
-        let mut r3 = NonblockingInStream::new(r3, 4);
+        let mut r1 = TaglessBroadcastInStream::new(NonblockingInStream::new(r1.into_inner(), 4));
+        let mut r2 = TaglessBroadcastInStream::new(NonblockingInStream::new(r2.into_inner(), 4));
+        let mut r3 = TaglessBroadcastInStream::new(NonblockingInStream::new(r3.into_inner(), 4));
         for _ in 0..2 * count {
             s3.send(to_send.clone()).await.unwrap();
             s4.send(to_send.clone()).await.unwrap();

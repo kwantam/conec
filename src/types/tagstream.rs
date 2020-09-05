@@ -10,58 +10,49 @@
 use super::InStream;
 
 use bytes::{Buf, BufMut, BytesMut};
-use err_derive::Error;
 use futures::prelude::*;
 use std::io;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-/// Err variant returned by TaglessBroadcastInStream
-#[derive(Debug, Error)]
-pub enum TaglessBroadcastInStreamError {
-    /// Error from the underlying stream
-    #[error(display = "InStream error: {:?}", _0)]
-    InStream(#[source] io::Error),
-    /// Encoded ID length was invalid
-    #[error(display = "Invalid ID length")]
-    IdLength,
-}
-
-// this is needed for doing recv.try_next().await?
-impl From<TaglessBroadcastInStreamError> for io::Error {
-    fn from(err: TaglessBroadcastInStreamError) -> Self {
-        io::Error::new(io::ErrorKind::Other, err)
-    }
-}
-
 /// Coordinator tags messages to broadcast streams with the sender's ID.
 /// This adapter drops the sender's ID and returns only the message that was sent.
-pub struct TaglessBroadcastInStream(InStream);
+pub struct TaglessBroadcastInStream<T, E>(T, PhantomData<*const E>);
 
-impl TaglessBroadcastInStream {
+impl<T: Unpin, E> Unpin for TaglessBroadcastInStream<T, E> {}
+
+impl<T, E> TaglessBroadcastInStream<T, E> {
     /// Create from the InStream returned by [Client::new_broadcast](crate::Client::new_broadcast).
-    pub fn new(recv: InStream) -> Self {
-        Self(recv)
+    pub fn new(recv: T) -> Self {
+        Self(recv, PhantomData)
+    }
+
+    /// Consume `self`, returning the enclosed InStream
+    pub fn into_inner(self) -> T {
+        self.0
     }
 }
 
-impl Stream for TaglessBroadcastInStream {
-    type Item = Result<BytesMut, TaglessBroadcastInStreamError>;
+impl<T, E> Stream for TaglessBroadcastInStream<T, E>
+where
+    T: Stream<Item = Result<BytesMut, E>> + Unpin,
+    io::Error: Into<E>,
+{
+    type Item = Result<BytesMut, E>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match self.0.poll_next_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e.into()))),
             Poll::Ready(Some(Ok(mut buf))) => {
                 let buf_len = buf.len();
                 let id_len = (&buf[buf_len - 4..]).get_u32() as usize;
                 if buf_len < id_len + 4 {
-                    return Poll::Ready(Some(Err(TaglessBroadcastInStreamError::IdLength)));
+                    return Poll::Ready(Some(Err(io::Error::new(io::ErrorKind::InvalidData, "IdLength").into())));
                 }
                 buf.truncate(buf_len - id_len - 4);
                 Poll::Ready(Some(Ok(buf)))
             }
+            p => p,
         }
     }
 }
