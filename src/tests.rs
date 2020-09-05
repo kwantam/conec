@@ -11,7 +11,7 @@ use crate::{
     ca::{generate_ca, generate_cert},
     client::{NewInStream, StreamId},
     Client, ClientConfig, Coord, CoordConfig, NonblockingInStream, NonblockingInStreamError,
-    TaglessBroadcastInStream,
+    TaggedBroadcastInStream, TaggedDeserializer, TaglessBroadcastInStream,
 };
 
 use anyhow::Context;
@@ -515,12 +515,13 @@ fn test_broadcast_loopback() {
 
         // open broadcast stream
         let (mut s11, r11) = client.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let mut r11 = TaglessBroadcastInStream::new(r11);
+        let mut r11 = TaggedBroadcastInStream::new(r11);
 
         let to_send = Bytes::from("loopback broadcast");
         s11.send(to_send.clone()).await.unwrap();
-        let rec = r11.try_next().await?.unwrap().freeze();
-        assert_eq!(to_send, rec);
+        let rec = r11.try_next().await?.unwrap();
+        assert_eq!("client1", &rec.0);
+        assert_eq!(to_send, rec.1);
         Ok(()) as Result<(), std::io::Error>
     })
     .ok();
@@ -560,26 +561,29 @@ fn test_broadcast_bidi() {
 
         // open broadcast streams
         let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
-        let mut r1 = TaglessBroadcastInStream::new(r1);
+        let mut r1 = TaggedBroadcastInStream::new(r1);
         let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
-        let rec1 = r1.try_next().await?.unwrap().freeze();
+        let rec1 = r1.try_next().await?.unwrap();
         let rec2 = r2.try_next().await?.unwrap().freeze();
-        assert_eq!(to_send, rec1);
+        assert_eq!("client1", &rec1.0);
+        assert_eq!(to_send, rec1.1);
         assert_eq!(to_send, rec2);
-        s2.send(rec1).await.unwrap();
-        let rec1 = r1.try_next().await?.unwrap().freeze();
-        let rec2 = r2.try_next().await?.unwrap().freeze();
-        assert_eq!(to_send, rec1);
+        s2.send(rec2).await.unwrap();
+        let rec1 = r1.try_next().await?.unwrap();
+        let rec2 = r2.try_next().await?.unwrap();
+        assert_eq!("client2", &rec1.0);
+        assert_eq!(to_send, rec1.1);
         assert_eq!(to_send, rec2);
 
         assert_eq!(coord.num_broadcasts(), 1);
 
         drop(r2);
         drop(s2);
+        let mut r1 = TaglessBroadcastInStream::new(r1.into_inner());
         assert_eq!(coord.num_broadcasts(), 1);
         s1.send(to_send.clone()).await.unwrap();
         let rec1 = r1.try_next().await?.unwrap().freeze();
@@ -637,23 +641,27 @@ fn test_broadcast_codec() {
         let (s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
         let mut s1 = SymmetricallyFramed::new(s1, SymmetricalBincode::<TestValues>::default());
         let r1 = NonblockingInStream::new(r1, 16);
+        let r1 = TaglessBroadcastInStream::new(r1);
         let mut r1 = SymmetricallyFramed::new(r1, SymmetricalBincode::<TestValues>::default());
 
         let (s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
         let mut s2 = SymmetricallyFramed::new(s2, SymmetricalBincode::<TestValues>::default());
-        let mut r2 = SymmetricallyFramed::new(r2, SymmetricalBincode::<TestValues>::default());
+        let r2 = TaggedBroadcastInStream::new(r2);
+        let mut r2 = TaggedDeserializer::new(r2, SymmetricalBincode::<TestValues>::default());
 
         s1.send(TestValues::ValueOne).await.unwrap();
         let rec1 = r1.try_next().await?.unwrap();
         let rec2 = r2.try_next().await?.unwrap();
         assert_eq!(rec1, TestValues::ValueOne);
-        assert_eq!(rec2, TestValues::ValueOne);
+        assert_eq!(&rec2.0, "client1");
+        assert_eq!(rec2.1, TestValues::ValueOne);
 
         s2.send(TestValues::ValueTwo).await.unwrap();
         let rec1 = r1.try_next().await?.unwrap();
         let rec2 = r2.try_next().await?.unwrap();
         assert_eq!(rec1, TestValues::ValueTwo);
-        assert_eq!(rec2, TestValues::ValueTwo);
+        assert_eq!(&rec2.0, "client2");
+        assert_eq!(rec2.1, TestValues::ValueTwo);
 
         Ok(()) as Result<(), std::io::Error>
     })

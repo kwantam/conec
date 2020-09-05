@@ -180,31 +180,37 @@ Clients open a new broadcast stream with [Client::new_broadcast]. Every client
 that supplies a given `chan` argument to [Client::new_broadcast] connects to
 the same broadcast stream.
 
-**Notes**:
+Unlike normal streams, broadcast streams carry both a message and the identity
+of its sender. Conec provides several adapters that a Client can apply to a
+broadcast InStream: [TaglessBroadcastInStream], [TaggedBroadcastInStream],
+and [TaggedDeserializer]. See examples of usage in `tests.rs` and below.
 
-- Clients receive the messages they send to the broadcast stream.
-- Messages received from the broadcast stream do not identify their sender.
-  (This may change in a future version of Conec.)
+Note that clients receive their own messages to broadcast, too!
 
 ```ignore
-let (mut s1, mut r1) = client1
+let (mut s1, r1) = client1
     .new_broadcast("test_broadcast_chan".to_string())
     .await
     .unwrap();
-let (mut s2, mut r2) = client2
+let mut r1 = TaglessBroadcastInStream::new(r1);
+
+let (mut s2, r2) = client2
     .new_broadcast("test_broadcast_chan".to_string())
     .await
     .unwrap();
+let r2 = NonblockingInStream::new(r2, 16);
+let mut r2 = TaggedBroadcastInStream::new(r2);
+// could now adapt with TaggedDeserializer to produce typed values
 
 s1.send(Bytes::from("test test test")).await.unwrap();
 let rec1 = r1.try_next().await?.unwrap();
 let rec2 = r2.try_next().await?.unwrap();
-assert_eq!(rec1, rec2);
+assert_eq!(rec1, rec2.1);
 
 s2.send(Bytes::from("sibilance")).await.unwrap();
 let rec1 = r1.try_next().await?.unwrap();
 let rec2 = r2.try_next().await?.unwrap();
-assert_eq!(rec1, rec2);
+assert_eq!(rec1, rec2.1);
 ```
 
 # Authentication
@@ -330,7 +336,7 @@ pub use client::{config::ClientConfig, Client};
 pub use coord::{config::CoordConfig, Coord};
 pub use types::{
     nbistream::{NonblockingInStream, NonblockingInStreamError},
-    tagstream::TaglessBroadcastInStream,
+    tagstream::{TaggedBroadcastInStream, TaggedDeserializer, TaglessBroadcastInStream},
     InStream, OutStream,
 };
 
