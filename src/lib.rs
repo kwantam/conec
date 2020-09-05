@@ -54,9 +54,8 @@ coord_cfg.enable_stateless_retry();
 coord_cfg.set_port(1337);
 ```
 
-Next, pass this configuration to the [Coord] constructor, which returns
-a future that returns the Coordiator plus a [coord::IncomingStreams] object
-when forced.
+Next, pass this configuration to the [Coord::new] constructor, which yields
+a future that returns the Coordiator object when forced.
 
 ```ignore
 let (coord, coord_istreams) = Coord::new(coord_cfg).await.unwrap();
@@ -96,8 +95,7 @@ let (client, istreams) = Client::new(client_cfg).await.unwrap();
 ## Proxied streams
 
 Once your Client has connected to its Coordinator, it can set up
-data streams with the Coordinator or other Clients, and send data on
-those streams:
+data streams with other Clients and send data on those streams:
 
 ```ignore
 let (mut to_client2, _from_client2) = client
@@ -122,31 +120,8 @@ let rec = from_client1
     .unwrap();
 ```
 
-The first element of the returned 4-tuple will be `Some(<name>)` when the
-peer is a Client called `<name>`, or `None` when the peer is the Coordinator.
-To open a stream to the Coordinator, pass `None` to `new_proxied_stream`:
-
-```ignore
-let (mut to_coord, _from_coord) = client
-    .new_proxied_stream(None)   // NOTE: None means open stream to Coordinator
-    .await
-    .unwrap();
-to_coord.send(Bytes::from("hi coordinator")).await.unwrap();
-```
-
-The Coordinator receives this stream by taking the next element from its
-[coord::IncomingStreams]:
-
-```ignore
-let (peer, strmid, _to_client, mut from_client) = coord_istreams
-    .next()
-    .await
-    .unwrap();
-```
-
-For the coordinator, the first element of the returned 4-tuple is a
-[String] rather than an [Option], since all incoming streams
-must be from clients.
+The first element of the returned 4-tuple will be `<name>` when the
+peer is a Client called `<name>`.
 
 ## Direct streams
 
@@ -166,51 +141,52 @@ to_client2.send(Bytes::from("hi there")).await.unwrap();
 ```
 
 Once two clients share a channel, either client can initiate a direct stream
-to the other. [Client::close_channel] closes the channel, which ends all
-of the direct streams between the two clients.
+to the other. [Client::close_channel] closes the channel, which also closes
+all direct streams between the two clients.
 
 ## Broadcast streams
 
 Clients can open broadcast streams, which allow many peers to send and receive
-simultaneously. In this version of Conec, Coordinator cannot participate in
-broadcast streams. This may change in a future version; until then, one can
-start a local Client and broadcast from there.
-
-Clients open a new broadcast stream with [Client::new_broadcast]. Every client
-that supplies a given `chan` argument to [Client::new_broadcast] connects to
-the same broadcast stream.
+simultaneously, by calling [Client::new_broadcast]. Every client that supplies
+a given `chan` argument to [Client::new_broadcast] connects to the same
+broadcast stream.
 
 Unlike normal streams, broadcast streams carry both a message and the identity
-of its sender. Conec provides several adapters that a Client can apply to a
+of its sender---Coordinator tags messages to broadcast streams with the sender's
+name. Conec provides several adapters that a Client can apply to a
 broadcast InStream: [TaglessBroadcastInStream], [TaggedBroadcastInStream],
 and [TaggedDeserializer]. See examples of usage in `tests.rs` and below.
 
-Note that clients receive their own messages to broadcast, too!
+**Note** that clients receive their own messages to broadcast, too!
 
 ```ignore
+// client1 is a client with id "client1"
 let (mut s1, r1) = client1
     .new_broadcast("test_broadcast_chan".to_string())
     .await
     .unwrap();
 let mut r1 = TaglessBroadcastInStream::new(r1);
 
+// client2 is a client with id "client2"
 let (mut s2, r2) = client2
     .new_broadcast("test_broadcast_chan".to_string())
     .await
     .unwrap();
 let r2 = NonblockingInStream::new(r2, 16);
 let mut r2 = TaggedBroadcastInStream::new(r2);
-// could now adapt with TaggedDeserializer to produce typed values
+// could also apply TaggedDeserializer to produce typed values
 
 s1.send(Bytes::from("test test test")).await.unwrap();
 let rec1 = r1.try_next().await?.unwrap();
 let rec2 = r2.try_next().await?.unwrap();
 assert_eq!(rec1, rec2.1);
+assert_eq!("client1", &rec2.0);
 
 s2.send(Bytes::from("sibilance")).await.unwrap();
 let rec1 = r1.try_next().await?.unwrap();
 let rec2 = r2.try_next().await?.unwrap();
 assert_eq!(rec1, rec2.1);
+assert_eq!("client2", &rec2.0);
 ```
 
 # Authentication
@@ -252,7 +228,9 @@ In conec, bi-directional streams are represented by a reader/writer pair,
 that outputs items of type [BytesMut](bytes::BytesMut); OutStream is a
 [Sink](futures::sink::Sink) that accepts items of type [Bytes](bytes::Bytes).
 
-## Sending typed values over a stream
+For adapters related to broadcast streams, see also [discussion above](#broadcast-streams).
+
+## Sending typed values over a point-to-point stream
 
 Both InStream and OutStream can be adapted to accept values of another type,
 using [tokio_serde]'s [SymmetricallyFramed](tokio_serde::SymmetricallyFramed)
@@ -289,7 +267,7 @@ This buffering is finite, however; when it is full, the transport layer
 applies back-pressure, blocking the sender from transmitting new messages
 until the receiver has consumed buffered ones.
 
-In some cases---especially for [broadcast streams](Client::new_broadcast)---it
+In some cases---especially for [broadcast streams](#broadcast-streams)---it
 may be useful to make streams non-blocking, at the cost of forcing slow
 receivers to drop messages. The [NonblockingInStream] adapter implements
 this at the receiver. Like InStream, NonblockingInStream can be composed
@@ -317,6 +295,10 @@ match recv_mytype.try_next().await {
     Ok(None) => println!("stream is closed now"),
 };
 ```
+
+**Note** that, as in the example above, NonblockingInStream must be the "innermost"
+adapter in a stack---[NonblockingInStream::new] only accepts an [InStream] as an argument.
+Other adapters can be stacked on top of a NonblockingInStream, as in the example above.
 
 */
 

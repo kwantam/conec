@@ -19,20 +19,14 @@ pub(crate) mod config;
 mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
-use crate::types::{
-    tagstream::TaggedInStream, ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle,
-    ControlMsg, CtrlStream, OutStream, OutStreamError,
-};
+use crate::types::{tagstream::TaggedInStream, ConecConn, ConecConnError, ControlMsg, CtrlStream, OutStream};
 use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanRef};
+pub use chan::CoordChanError;
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
-pub use chan::{CoordChanError, NewInStream};
 use config::CoordConfig;
 
 use err_derive::Error;
-use futures::{
-    channel::{mpsc, oneshot},
-    prelude::*,
-};
+use futures::{channel::mpsc, prelude::*};
 use quinn::{
     crypto::rustls::TLSError, Certificate, CertificateChain, ConnectionError, Endpoint, EndpointError, Incoming,
     IncomingBiStreams, PrivateKey, RecvStream, SendStream, ServerConfig, ServerConfigBuilder,
@@ -78,12 +72,11 @@ enum CoordEvent {
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
     ChanClose(String),
     BroadcastClose(String),
-    NewCoStream(String, u32, ConnectingOutStreamHandle),
-    NewStreamReq(String, String, u32),
-    NewStreamRes(String, u32, Result<(SendStream, RecvStream), ConnectionError>),
-    NewChannelReq(String, String, u32, Vec<u8>),
-    NewChannelRes(String, u32, SocketAddr, Vec<u8>),
-    NewChannelErr(String, u32),
+    NewStreamReq(String, String, u64),
+    NewStreamRes(String, u64, Result<(SendStream, RecvStream), ConnectionError>),
+    NewChannelReq(String, String, u64, Vec<u8>),
+    NewChannelRes(String, u64, SocketAddr, Vec<u8>),
+    NewChannelErr(String, u64),
     NewBroadcastReq(String, OutStream, TaggedInStream),
 }
 
@@ -95,7 +88,6 @@ struct CoordInner {
     ref_count: usize,
     sender: mpsc::UnboundedSender<CoordEvent>,
     events: mpsc::UnboundedReceiver<CoordEvent>,
-    is_sender: mpsc::UnboundedSender<NewInStream>,
 }
 
 impl CoordInner {
@@ -152,14 +144,8 @@ impl CoordInner {
                             drop(conn);
                         });
                     } else {
-                        let (inner, sender) = CoordChanRef::new(
-                            conn,
-                            ctrl,
-                            ibi,
-                            peer.clone(),
-                            self.sender.clone(),
-                            self.is_sender.clone(),
-                        );
+                        let (inner, sender) =
+                            CoordChanRef::new(conn, ctrl, ibi, peer.clone(), self.sender.clone());
 
                         // spawn channel driver
                         let driver = CoordChanDriver(inner.clone());
@@ -187,13 +173,6 @@ impl CoordInner {
                         c_to.send(CoordChanEvent::NSRes(sid, result));
                     } else {
                         tracing::warn!("NSRes client disappeared: {}:{}", to, sid);
-                    }
-                }
-                NewCoStream(to, sid, handle) => {
-                    if let Some(c_to) = self.clients.get(&to) {
-                        c_to.send(CoordChanEvent::BiOut(sid, handle));
-                    } else {
-                        handle.send(Err(OutStreamError::NoSuchPeer(to))).ok();
                     }
                 }
                 NewChannelReq(from, to, sid, cert) => {
@@ -253,23 +232,17 @@ impl CoordInner {
 
 def_ref!(CoordInner, CoordRef, pub(self));
 impl CoordRef {
-    fn new(incoming: Incoming) -> (Self, IncomingStreams, mpsc::UnboundedSender<CoordEvent>) {
+    fn new(incoming: Incoming) -> Self {
         let (sender, events) = mpsc::unbounded();
-        let (is_sender, incoming_streams) = mpsc::unbounded();
-        (
-            Self(Arc::new(Mutex::new(CoordInner {
-                incoming,
-                clients: HashMap::new(),
-                broadcasts: HashMap::new(),
-                driver: None,
-                ref_count: 0,
-                sender: sender.clone(),
-                events,
-                is_sender,
-            }))),
-            incoming_streams,
+        Self(Arc::new(Mutex::new(CoordInner {
+            incoming,
+            clients: HashMap::new(),
+            broadcasts: HashMap::new(),
+            driver: None,
+            ref_count: 0,
             sender,
-        )
+            events,
+        })))
     }
 }
 
@@ -281,14 +254,8 @@ impl Drop for CoordDriver {
         inner.clients.clear();
         inner.sender.close_channel();
         inner.events.close();
-        inner.is_sender.close_channel();
     }
 }
-
-/// A [Stream] of incoming data streams from Client or Coordinator.
-///
-/// See [library documentation](../index.html) for a usage example.
-pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 
 /// Main coordinator object
 ///
@@ -296,9 +263,7 @@ pub type IncomingStreams = mpsc::UnboundedReceiver<NewInStream>;
 pub struct Coord {
     endpoint: Endpoint,
     inner: CoordRef,
-    sender: mpsc::UnboundedSender<CoordEvent>,
     driver_handle: JoinHandle<Result<(), CoordError>>,
-    ctr: u32,
 }
 
 impl Coord {
@@ -324,7 +289,7 @@ impl Coord {
     }
 
     /// Construct a new coordinator and listen for Clients
-    pub async fn new(config: CoordConfig) -> Result<(Self, IncomingStreams), CoordError> {
+    pub async fn new(config: CoordConfig) -> Result<Self, CoordError> {
         // build configuration
         let (cert, key) = config.cert_and_key;
         let qsc = Self::build_config(config.stateless_retry, config.keylog, cert, key, config.client_ca)?;
@@ -334,20 +299,15 @@ impl Coord {
         endpoint.listen(qsc);
         let (endpoint, incoming) = endpoint.bind(&config.laddr)?;
 
-        let (inner, incoming_streams, sender) = CoordRef::new(incoming);
+        let inner = CoordRef::new(incoming);
         let driver = CoordDriver(inner.clone());
         let driver_handle = tokio::spawn(async move { driver.await });
 
-        Ok((
-            Self {
-                endpoint,
-                inner,
-                sender,
-                driver_handle,
-                ctr: 1u32 << 31,
-            },
-            incoming_streams,
-        ))
+        Ok(Self {
+            endpoint,
+            inner,
+            driver_handle,
+        })
     }
 
     /// Report number of connected clients
@@ -366,33 +326,6 @@ impl Coord {
     pub fn local_addr(&self) -> std::net::SocketAddr {
         // unwrap is safe because Coord always has a bound socket
         self.endpoint.local_addr().unwrap()
-    }
-
-    /// Open a new stream to a Client
-    pub fn new_stream(&mut self, to: String) -> ConnectingOutStream {
-        let ctr = self.ctr;
-        self.ctr += 1;
-        self.new_stream_with_id(to, ctr)
-    }
-
-    /// Open a new stream to a Client with an explicit stream-id
-    ///
-    /// The `sid` argument must be different for every call to this function for a given Client.
-    /// If mixing calls to this function with calls to [new_stream](Coord::new_stream), avoid using
-    /// `sid >= 1<<31`: those values are used automatically by that function.
-    pub fn new_stream_with_id(&self, to: String, sid: u32) -> ConnectingOutStream {
-        let (sender, receiver) = oneshot::channel();
-        self.sender
-            .unbounded_send(CoordEvent::NewCoStream(to, sid, sender))
-            .map_err(|e| {
-                if let CoordEvent::NewCoStream(_, _, sender) = e.into_inner() {
-                    sender.send(Err(OutStreamError::Event)).ok();
-                } else {
-                    unreachable!();
-                }
-            })
-            .ok();
-        ConnectingOutStream(receiver)
     }
 }
 

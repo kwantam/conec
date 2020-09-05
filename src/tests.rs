@@ -9,7 +9,7 @@
 
 use crate::{
     ca::{generate_ca, generate_cert},
-    client::{NewInStream, StreamId},
+    client::StreamId,
     Client, ClientConfig, Coord, CoordConfig, NonblockingInStream, NonblockingInStreamError,
     TaggedBroadcastInStream, TaggedDeserializer, TaglessBroadcastInStream,
 };
@@ -31,7 +31,7 @@ fn test_simple() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -60,7 +60,7 @@ fn test_repeat_name() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0);
@@ -101,7 +101,7 @@ fn test_stream_uni() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -130,15 +130,24 @@ fn test_stream_uni() {
         // open stream to client2
         let (mut s12, _r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
         // receive stream at client2
-        let mut r12 = match inc2.next().await.unwrap() {
-            NewInStream::Client(_, _, _, r12) => r12,
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (_, _, _, mut r12) = inc2.next().await.unwrap();
 
         let to_send = Bytes::from("test stream");
         s12.send(to_send.clone()).await.unwrap();
         let rec = r12.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
+
+        // try to open new streams --- should fail because of sid reuse
+        client1
+            .new_stream_with_id("client1".to_string(), StreamId::Proxied(1u64 << 63))
+            .await
+            .map(|_| ())
+            .expect_err("sid reuse should cause failure");
+        client1
+            .new_broadcast_with_id("fail".to_string(), 1u64 << 63)
+            .await
+            .map(|_| ())
+            .expect_err("sid reuse should cause failure");
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -151,7 +160,7 @@ fn test_stream_bi() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -180,10 +189,7 @@ fn test_stream_bi() {
         // open stream to client2
         let (mut s12, mut r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
         // receive stream at client2
-        let (mut s21, mut r12) = match inc2.next().await.unwrap() {
-            NewInStream::Client(_, _, s21, r12) => (s21, r12),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (_, _, mut s21, mut r12) = inc2.next().await.unwrap();
 
         let to_send = Bytes::from("ping pong");
         s12.send(to_send.clone()).await.unwrap();
@@ -203,7 +209,7 @@ fn test_stream_block_nonblock() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -235,10 +241,7 @@ fn test_stream_block_nonblock() {
         let (mut s12, r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
         let mut r21 = NonblockingInStream::new(r21, BCAST_QUEUE);
         // receive stream at client2
-        let (mut s21, mut r12) = match inc2.next().await.unwrap() {
-            NewInStream::Client(_, _, s21, r12) => (s21, r12),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (_, _, mut s21, mut r12) = inc2.next().await.unwrap();
 
         // send from client1 to client2 (blocking direction)
         let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
@@ -297,7 +300,7 @@ fn test_stream_bi_multi() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -327,10 +330,7 @@ fn test_stream_bi_multi() {
         #[allow(clippy::same_item_push)] // suppress false positive
         for _ in 0..4usize {
             let (s12, r21) = client1.new_proxied_stream("client2".to_string()).await.unwrap();
-            let (sender, s21, r12) = match inc2.next().await.unwrap() {
-                NewInStream::Client(sender, _, s21, r12) => (sender, s21, r12),
-                NewInStream::Coord(..) => unreachable!(),
-            };
+            let (sender, _, s21, r12) = inc2.next().await.unwrap();
             assert_eq!(sender, "client1".to_string());
             streams.push((s12, r21, s21, r12));
         }
@@ -353,7 +353,7 @@ fn test_stream_loopback() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -374,10 +374,7 @@ fn test_stream_loopback() {
         // open stream to client
         let (mut s11, mut r11x) = client.new_proxied_stream("client1".to_string()).await.unwrap();
         // receive stream at client
-        let (mut s11x, mut r11) = match inc.next().await.unwrap() {
-            NewInStream::Client(_, _, s11x, r11) => (s11x, r11),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (_, _, mut s11x, mut r11) = inc.next().await.unwrap();
 
         let to_send = Bytes::from("loopback stream");
         s11.send(to_send.clone()).await.unwrap();
@@ -385,104 +382,6 @@ fn test_stream_loopback() {
         s11x.send(rec).await.unwrap();
         let rec = r11x.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
-
-        Ok(()) as Result<(), std::io::Error>
-    })
-    .ok();
-}
-
-#[test]
-fn test_stream_client_to_coord() {
-    let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
-    rt.block_on(async move {
-        // start server
-        let (coord, mut cinc) = {
-            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
-            coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(0); // auto assign
-            Coord::new(coord_cfg).await.unwrap()
-        };
-        let port = coord.local_addr().port();
-
-        // start client 1
-        let (mut client, _inc) = {
-            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca_from_file(&cpath).unwrap();
-            client_cfg.set_port(port);
-            Client::new(client_cfg.clone()).await.unwrap()
-        };
-
-        assert_eq!(coord.num_clients(), 1);
-
-        // open stream to client
-        let (mut s11, mut r11x) = client.new_proxied_stream(None).await.unwrap();
-        // receive stream at coordinator
-        let (sender, _strmid, mut s11x, mut r11) = cinc.next().await.unwrap();
-
-        let to_send = Bytes::from("loopback stream");
-        s11.send(to_send.clone()).await.unwrap();
-        let rec = r11.try_next().await?.unwrap().freeze();
-        s11x.send(rec).await.unwrap();
-        let rec = r11x.try_next().await?.unwrap();
-        assert_eq!(to_send, rec);
-        assert_eq!("client1", &sender);
-
-        // should error if we try to reuse a sid, even with a different target
-        assert!(client
-            .new_stream_with_id("client1".to_string(), StreamId::Proxied(1u32 << 31))
-            .await
-            .is_err());
-
-        Ok(()) as Result<(), std::io::Error>
-    })
-    .ok();
-}
-
-#[test]
-fn test_stream_coord_to_client() {
-    let (cpath, kpath) = get_cert_paths();
-    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
-    rt.block_on(async move {
-        // start server
-        let (mut coord, _cinc) = {
-            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
-            coord_cfg.enable_stateless_retry();
-            coord_cfg.set_port(0); // auto assign
-            Coord::new(coord_cfg).await.unwrap()
-        };
-        let port = coord.local_addr().port();
-
-        // start client 1
-        let (_client, mut inc) = {
-            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
-            client_cfg.set_ca_from_file(&cpath).unwrap();
-            client_cfg.set_port(port);
-            Client::new(client_cfg.clone()).await.unwrap()
-        };
-
-        assert_eq!(coord.num_clients(), 1);
-
-        // open stream to client
-        let (mut s11, mut r11x) = coord.new_stream("client1".to_string()).await.unwrap();
-        // receive stream at client
-        let (mut s11x, mut r11) = match inc.next().await.unwrap() {
-            NewInStream::Client(..) => unreachable!(),
-            NewInStream::Coord(_, s11x, r11) => (s11x, r11),
-        };
-
-        let to_send = Bytes::from("loopback stream");
-        s11.send(to_send.clone()).await.unwrap();
-        let rec = r11.try_next().await?.unwrap().freeze();
-        s11x.send(rec).await.unwrap();
-        let rec = r11x.try_next().await?.unwrap();
-        assert_eq!(to_send, rec);
-
-        // should error if we try to reuse a sid, even with a different target
-        assert!(coord
-            .new_stream_with_id("client2".to_string(), 1u32 << 31)
-            .await
-            .is_err());
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -495,7 +394,7 @@ fn test_broadcast_loopback() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -533,7 +432,7 @@ fn test_broadcast_bidi() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -605,7 +504,7 @@ fn test_broadcast_codec() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -674,7 +573,7 @@ fn test_broadcast_sender_close() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -738,7 +637,7 @@ fn test_broadcast_receiver_close() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -809,7 +708,7 @@ fn test_broadcast_block_nonblock() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1011,7 +910,7 @@ fn test_channel_errors() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1030,7 +929,6 @@ fn test_channel_errors() {
         assert_eq!(coord.num_clients(), 1);
 
         // open stream to Coord --- should work
-        client.new_direct_stream(None).await.unwrap();
         client
             .new_direct_stream("client1".to_string())
             .await
@@ -1055,7 +953,7 @@ fn test_channel_simple() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1094,10 +992,7 @@ fn test_channel_simple() {
         time::delay_for(Duration::from_millis(40)).await;
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = match inc2.next().await.unwrap() {
-            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
         assert_eq!(&sender, "client1");
         assert!(strmid.is_direct());
 
@@ -1119,7 +1014,7 @@ fn test_channel_close() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1156,10 +1051,7 @@ fn test_channel_close() {
             .expect_err("duplicate channel should be rejected");
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = match inc2.next().await.unwrap() {
-            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
         assert_eq!(&sender, "client1");
         assert!(strmid.is_direct());
 
@@ -1197,7 +1089,7 @@ fn test_channel_oneway() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1231,10 +1123,7 @@ fn test_channel_oneway() {
 
         // once client1 connects, client2 can initiate a stream
         let (mut s12, mut r21) = client2.new_direct_stream("client1".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = match inc.next().await.unwrap() {
-            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (sender, strmid, mut s21, mut r12) = inc.next().await.unwrap();
         assert_eq!(&sender, "client2");
         assert!(strmid.is_direct());
 
@@ -1244,6 +1133,13 @@ fn test_channel_oneway() {
         s21.send(rec).await.unwrap();
         let rec = r21.try_next().await?.unwrap();
         assert_eq!(to_send, rec);
+
+        // make sure that repeated sid use causes failure
+        client2
+            .new_stream_with_id("client2".to_string(), StreamId::Direct(1u64 << 63))
+            .await
+            .map(|_| ())
+            .expect_err("reused sid should cause failure");
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -1269,7 +1165,7 @@ fn test_client_cert() {
 
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1338,7 +1234,7 @@ fn test_client_cert_channel() {
 
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1402,10 +1298,7 @@ fn test_client_cert_channel() {
             .expect_err("duplicate channel should be rejected");
 
         let (mut s12, mut r21) = client.new_direct_stream("client2".to_string()).await.unwrap();
-        let (sender, strmid, mut s21, mut r12) = match inc2.next().await.unwrap() {
-            NewInStream::Client(sender, strmid, s21, r12) => (sender, strmid, s21, r12),
-            NewInStream::Coord(..) => unreachable!(),
-        };
+        let (sender, strmid, mut s21, mut r12) = inc2.next().await.unwrap();
         assert_eq!(&sender, "client1");
         assert!(strmid.is_direct());
 
@@ -1448,7 +1341,7 @@ fn test_reject_client_cert() {
     let cacert = Certificate::from_der(cacert.serialize_der().unwrap().as_ref()).unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign
@@ -1479,7 +1372,7 @@ fn test_keepalive() {
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
         // start server
-        let (coord, _cinc) = {
+        let coord = {
             let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
             coord_cfg.enable_stateless_retry();
             coord_cfg.set_port(0); // auto assign

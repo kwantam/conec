@@ -8,11 +8,9 @@
 // except according to those terms.
 
 use super::ichan::{IncomingChannelsEvent, NewChannelError};
+use super::{ConnectingOutStream, ConnectingOutStreamHandle, OutStreamError};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
-use crate::types::{
-    ConecConn, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream, OutStreamError, StreamPeer,
-    StreamTo,
-};
+use crate::types::{ConecConn, ControlMsg, CtrlStream, StreamTo};
 use crate::util;
 
 use err_derive::Error;
@@ -46,10 +44,10 @@ pub enum ClientChanError {
     WrongMessage(ControlMsg),
     /// Coordinator sent us a message about a nonexistent stream-id
     #[error(display = "Coord response about nonexistent strmid {}", _0)]
-    NonexistentStrOrCh(u32),
+    NonexistentStrOrCh(u64),
     /// Coordinator sent us a message about a stale stream-id
     #[error(display = "Coord response about stale strmid {}", _0)]
-    StaleStrOrCh(u32),
+    StaleStrOrCh(u64),
     /// Another client driver died
     #[error(display = "Another client driver died")]
     OtherDriverHup,
@@ -75,8 +73,8 @@ pub(super) struct ClientChanInner {
     ref_count: usize,
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
-    new_streams: HashMap<u32, Option<ConnectingOutStreamHandle>>,
-    new_channels: HashMap<u32, Option<(String, ConnectingChannelHandle)>>,
+    new_streams: HashMap<u64, Option<ConnectingOutStreamHandle>>,
+    new_channels: HashMap<u64, Option<(String, ConnectingChannelHandle)>>,
     flushing: bool,
     keepalive: Option<Interval>,
     ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
@@ -128,7 +126,7 @@ impl ClientChanInner {
         }
     }
 
-    fn get_new_str_or_ch<T>(sid: u32, hash: &mut HashMap<u32, Option<T>>) -> Result<T, ClientChanError> {
+    fn get_new_str_or_ch<T>(sid: u64, hash: &mut HashMap<u64, Option<T>>) -> Result<T, ClientChanError> {
         if let Some(chan) = hash.get_mut(&sid) {
             if let Some(chan) = chan.take() {
                 Ok(chan)
@@ -288,7 +286,7 @@ pub(super) struct ClientChan(pub(super) ClientChanRef);
 // XXX should we do this asynchronously via a channel instead?
 //     lock contention on a client channel seems like it should be low
 impl ClientChan {
-    pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
+    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingOutStream {
         // the new stream future is a channel that will contain the resulting stream
         let (sender, receiver) = oneshot::channel();
         let mut inner = self.0.lock().unwrap();
@@ -296,16 +294,8 @@ impl ClientChan {
         // make sure this stream hasn't already been used
         if inner.new_streams.get(&sid).is_some() {
             sender.send(Err(OutStreamError::StreamId)).ok();
-        } else if to.is_coord() {
-            // record that we've used this sid
-            inner.new_streams.insert(sid, None);
-            // send the coordinator a request and record the send side of the channel
-            let sid = StreamTo::Coord(sid);
-            inner.new_stream(sender, sid);
         } else {
-            inner
-                .to_send
-                .push_back(ControlMsg::NewStreamReq(to.into_id().unwrap(), sid));
+            inner.to_send.push_back(ControlMsg::NewStreamReq(to, sid));
             inner.new_streams.insert(sid, Some(sender));
             inner.wake();
         }
@@ -313,7 +303,7 @@ impl ClientChan {
         ConnectingOutStream(receiver)
     }
 
-    pub(super) fn new_channel(&self, to: String, sid: u32) -> ConnectingChannel {
+    pub(super) fn new_channel(&self, to: String, sid: u64) -> ConnectingChannel {
         // future that will return the result from the coordinator
         let (sender, receiver) = oneshot::channel();
         let mut inner = self.0.lock().unwrap();
@@ -329,7 +319,7 @@ impl ClientChan {
         ConnectingChannel(receiver)
     }
 
-    pub(super) fn new_broadcast(&self, chan: String, sid: u32) -> ConnectingOutStream {
+    pub(super) fn new_broadcast(&self, chan: String, sid: u64) -> ConnectingOutStream {
         let (sender, receiver) = oneshot::channel();
         let mut inner = self.0.lock().unwrap();
 

@@ -54,7 +54,9 @@
     - [x] Client authentication via pubkeys
         - right now, client connects with ephemeral self-signed cert. once we
           add client-to-client connections, coord will pass that cert to client.
-    - [x] direct Client <-> Coord streams
+    - [x] ~direct Client <-> Coord streams~
+        - [x] v0.0.12 removes these --- just use a new Client with a well-known name!
+            - this ends up being a considerable simplification
     - [x] Client keepalive
     - [ ] direct Client <-> Client channels
         - [x] incoming channels listener
@@ -68,9 +70,9 @@
             - seems like there is a bug somewhere---possibly in quinn or rustls---that close/reopen triggers
             - [ ] investigate this bug!
     - [x] broadcast streams for Clients
-    - [ ] broadcast streams for Coordinator?
-        - alternative: just connect a Client --- simplifies broadcast impl
-        - in the alternative case, remove Coordinator-side stream support? (just use Client)
+    - [x] ~broadcast streams for Coordinator?~
+        - no: just connect a Client
+        - v0.0.12: remove Coordinator-side stream support
     - [x] Broadcast: identify the sending client?
     - [ ] add intf to automagically pick between client-to-client and proxied streams
         - super magical version: automatically initiate a new client channel

@@ -10,11 +10,9 @@
 use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
 use super::chan::ConnectingChannelHandle;
 use super::NewInStream;
+use super::{ConnectingOutStream, ConnectingOutStreamHandle, OutStreamError};
 use crate::consts::MAX_LOOPS;
-use crate::types::{
-    ConecConn, ConecConnError, ConnectingOutStream, ConnectingOutStreamHandle, ControlMsg, CtrlStream,
-    OutStreamError, StreamPeer,
-};
+use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 
 use err_derive::Error;
 use futures::{
@@ -131,7 +129,7 @@ pub(super) enum IncomingChannelsEvent {
     ),
     ChanClose(String, Option<ClosingChannelHandle>),
     NewChannel(String, SocketAddr, Vec<u8>, ConnectingChannelHandle),
-    NewStream(String, u32, ConnectingOutStreamHandle),
+    NewStream(String, u64, ConnectingOutStreamHandle),
 }
 
 enum ChanHandle {
@@ -425,25 +423,20 @@ impl IncomingChannels {
         Self { inner, sender }
     }
 
-    pub(super) fn new_stream(&self, to: StreamPeer, sid: u32) -> ConnectingOutStream {
+    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingOutStream {
+        use IncomingChannelsEvent::NewStream;
+
         let (sender, receiver) = oneshot::channel();
-        if to.is_coord() {
-            sender
-                .send(Err(OutStreamError::NoSuchPeer("<Direct-to-Coord>".to_string())))
-                .ok();
-        } else {
-            use IncomingChannelsEvent::NewStream;
-            self.sender
-                .unbounded_send(NewStream(to.into_id().unwrap(), sid, sender))
-                .map_err(|e| {
-                    if let NewStream(_, _, sender) = e.into_inner() {
-                        sender.send(Err(OutStreamError::Event)).ok();
-                    } else {
-                        unreachable!()
-                    }
-                })
-                .ok();
-        }
+        self.sender
+            .unbounded_send(NewStream(to, sid, sender))
+            .map_err(|e| {
+                if let NewStream(_, _, sender) = e.into_inner() {
+                    sender.send(Err(OutStreamError::Event)).ok();
+                } else {
+                    unreachable!()
+                }
+            })
+            .ok();
 
         ConnectingOutStream(receiver)
     }
