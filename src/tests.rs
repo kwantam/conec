@@ -143,11 +143,6 @@ fn test_stream_uni() {
             .await
             .map(|_| ())
             .expect_err("sid reuse should cause failure");
-        client1
-            .new_broadcast_with_id("fail".to_string(), 1u64 << 63)
-            .await
-            .map(|_| ())
-            .expect_err("sid reuse should cause failure");
 
         Ok(()) as Result<(), std::io::Error>
     })

@@ -224,7 +224,7 @@ impl Client {
         self.new_x_stream(to, StreamId::Proxied)
     }
 
-    /// Open a new stream to another client directly
+    /// Open a new stream to another client via a direct channel.
     ///
     /// It is only possible to open another stream to a client for which there is
     /// an open channel, either because that client connected to this one or because
@@ -237,12 +237,15 @@ impl Client {
     where
         F: FnOnce(u64) -> StreamId,
     {
-        let ctr = self.ctr;
+        let sid = as_id(self.ctr);
         self.ctr += 1;
-        self.new_stream_with_id(to, as_id(ctr))
+        self.new_stream_with_id(to, sid)
     }
 
-    /// Open a new proxied stream to another client with an explicit stream-id
+    /// Open a new proxied stream to another client with an explicit stream-id. This can
+    /// be useful for coordination in applications where peers share multiple data streams
+    /// (e.g., clients might agree that sid 1 is for values of type T1, sid 2 is for values
+    /// of type T2, etc.).
     ///
     /// The `sid` argument must be different for every call to this function for a given Client object.
     /// If mixing calls to this function with calls to [Client::new_proxied_stream] or
@@ -262,14 +265,7 @@ impl Client {
     pub fn new_channel(&mut self, to: String) -> ConnectingChannel {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.new_channel_with_id(to, ctr)
-    }
-
-    /// Open a new channel directly to another client with an explicit channel-id
-    ///
-    /// The `cid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
-    pub fn new_channel_with_id(&self, to: String, cid: u64) -> ConnectingChannel {
-        self.coord.new_channel(to, cid)
+        self.coord.new_channel(to, ctr)
     }
 
     /// Close an open channel
@@ -292,13 +288,6 @@ impl Client {
     pub fn new_broadcast(&mut self, chan: String) -> ConnectingOutStream {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.new_broadcast_with_id(chan, ctr)
-    }
-
-    /// Open or connect to a broadcast stream with an explicit stream-id
-    ///
-    /// The `sid` argument follows the same rules as the `sid` argument to [Client::new_stream_with_id].
-    pub fn new_broadcast_with_id(&self, chan: String, sid: u64) -> ConnectingOutStream {
-        self.coord.new_broadcast(chan, sid)
+        self.coord.new_broadcast(chan, ctr)
     }
 }
