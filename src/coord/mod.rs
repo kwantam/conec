@@ -74,7 +74,7 @@ enum CoordEvent {
     BroadcastClose(String),
     NewStreamReq(String, String, u64),
     NewStreamRes(String, u64, Result<(SendStream, RecvStream), ConnectionError>),
-    NewChannelReq(String, String, u64, Vec<u8>),
+    NewChannelReq(String, String, u64, Vec<u8>, SocketAddr),
     NewChannelRes(String, u64, SocketAddr, Vec<u8>),
     NewChannelErr(String, u64),
     NewBroadcastReq(String, OutStream, TaggedInStream),
@@ -175,9 +175,9 @@ impl CoordInner {
                         tracing::warn!("NSRes client disappeared: {}:{}", to, sid);
                     }
                 }
-                NewChannelReq(from, to, sid, cert) => {
+                NewChannelReq(from, to, sid, cert, addr) => {
                     if let Some(c_to) = self.clients.get(&to) {
-                        c_to.send(CoordChanEvent::NCReq(from, sid, cert));
+                        c_to.send(CoordChanEvent::NCReq(from, sid, cert, addr));
                     } else if let Some(c_from) = self.clients.get(&from) {
                         c_from.send(CoordChanEvent::NCErr(sid));
                     } else {

@@ -85,7 +85,7 @@ pub(super) enum CoordChanEvent {
     NSReq(String, u64),
     NSRes(u64, Result<(SendStream, RecvStream), ConnectionError>),
     NCErr(u64),
-    NCReq(String, u64, Vec<u8>),
+    NCReq(String, u64, Vec<u8>, SocketAddr),
     NCRes(u64, SocketAddr, Vec<u8>),
     BiIn(StreamTo, OutStream, InStream),
 }
@@ -113,6 +113,7 @@ impl CoordChanInner {
                         to,
                         sid,
                         self.conn.get_cert_bytes().to_vec(),
+                        self.conn.remote_addr(),
                     ))
                     .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
                 ControlMsg::CertOk(to, sid) => {
@@ -187,7 +188,7 @@ impl CoordChanInner {
                     });
                 }
                 NCErr(sid) => self.to_send.push_back(ControlMsg::NewChannelErr(sid)),
-                NCReq(to, sid, cert) => self.to_send.push_back(ControlMsg::CertReq(to, sid, cert)),
+                NCReq(to, sid, cert, addr) => self.to_send.push_back(ControlMsg::CertReq(to, sid, cert, addr)),
                 NCRes(sid, addr, cert) => self.to_send.push_back(ControlMsg::NewChannelOk(sid, addr, cert)),
                 BiIn(sid, n_send, n_recv) => match sid {
                     StreamTo::Broadcast(sid) => {

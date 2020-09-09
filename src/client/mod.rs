@@ -16,6 +16,7 @@ See [library documentation](../index.html) for more info on how to instantiate a
 mod cchan;
 pub(crate) mod chan;
 pub(crate) mod config;
+mod holepunch;
 mod ichan;
 mod istream;
 mod tls;
@@ -26,6 +27,7 @@ use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
+use holepunch::{Holepunch, HolepunchDriver, HolepunchEvent, HolepunchRef};
 pub use ichan::{ClosingChannel, IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream, StreamId};
@@ -38,6 +40,7 @@ use futures::{
 };
 use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, ConnectionError, Endpoint, EndpointError, ParseError};
 use std::io;
+use std::net::UdpSocket;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -119,6 +122,8 @@ pub struct Client {
     #[allow(dead_code)]
     in_streams: IncomingStreamsRef,
     in_channels: IncomingChannels,
+    #[allow(dead_code)]
+    holepunch: Option<Holepunch>,
     coord: ClientChan,
     ctr: u64,
 }
@@ -163,7 +168,11 @@ impl Client {
             )?;
             endpoint.listen(qsc);
         }
-        let (mut endpoint, incoming) = endpoint.bind(&config.srcaddr)?;
+        let (socket, (mut endpoint, incoming)) = {
+            let socket = UdpSocket::bind(&config.srcaddr).map_err(EndpointError::Socket)?;
+            let socket2 = socket.try_clone().map_err(EndpointError::Socket)?;
+            (socket, endpoint.with_socket(socket2)?)
+        };
 
         // set up the network endpoint and connect to the coordinator
         let (mut conn, ibi) = ConecConn::connect(&mut endpoint, &config.coord, config.addr, None).await?;
@@ -193,9 +202,18 @@ impl Client {
             (IncomingChannels::new(inner, sender.clone()), sender)
         };
 
+        let (holepunch, holepunch_sender) = if config.holepunch && config.listen {
+            let (inner, sender) = HolepunchRef::new(socket);
+            let driver = HolepunchDriver(inner.clone());
+            tokio::spawn(async move { driver.await });
+            (Some(Holepunch(inner)), Some(sender))
+        } else {
+            (None, None)
+        };
+
         // client-coordinator channel
         let coord = {
-            let coord = ClientChanRef::new(conn, ctrl, ichan_sender, config.listen);
+            let coord = ClientChanRef::new(conn, ctrl, ichan_sender, holepunch_sender, config.listen);
             let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
             tokio::spawn(async move { driver.await });
             ClientChan(coord)
@@ -212,6 +230,7 @@ impl Client {
             Self {
                 in_streams,
                 in_channels,
+                holepunch,
                 coord,
                 ctr: 1u64 << 63,
             },

@@ -34,7 +34,7 @@ pub enum ControlMsg {
     NewChannelReq(String, u64),
     NewChannelErr(u64),
     NewChannelOk(u64, SocketAddr, Vec<u8>),
-    CertReq(String, u64, Vec<u8>),
+    CertReq(String, u64, Vec<u8>, SocketAddr),
     CertNok(String, u64),
     CertOk(String, u64),
     NewBroadcastReq(String, u64),

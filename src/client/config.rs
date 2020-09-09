@@ -33,6 +33,7 @@ pub struct ClientConfig {
     pub(super) stateless_retry: bool,
     pub(super) listen: bool,
     pub(super) keepalive: bool,
+    pub(super) holepunch: bool,
 }
 
 /// Error during Client certificate generation
@@ -71,6 +72,7 @@ impl ClientConfig {
             stateless_retry: false,
             listen: true,
             keepalive: true,
+            holepunch: true,
         }
     }
 
@@ -168,6 +170,16 @@ impl ClientConfig {
     /// connections after 10 seconds.
     pub fn disable_keepalive(&mut self) -> &mut Self {
         self.keepalive = false;
+        self
+    }
+
+    /// Disable holepunching
+    ///
+    /// By default, Clients that are listening for incoming channels will attempt
+    /// to set up a UDP Holepunch when alerted by the Coordinator that a new channel
+    /// is incoming. This setting disables that.
+    pub fn disable_holepunch(&mut self) -> &mut Self {
+        self.holepunch = false;
         self
     }
 

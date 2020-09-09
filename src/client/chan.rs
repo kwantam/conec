@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::ichan::{IncomingChannelsEvent, NewChannelError};
-use super::{ConnectingOutStream, ConnectingOutStreamHandle, OutStreamError};
+use super::{ConnectingOutStream, ConnectingOutStreamHandle, HolepunchEvent, OutStreamError};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{ConecConn, ControlMsg, CtrlStream, StreamTo};
 use crate::util;
@@ -78,6 +78,7 @@ pub(super) struct ClientChanInner {
     flushing: bool,
     keepalive: Option<Interval>,
     ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
+    holepunch_sender: Option<mpsc::UnboundedSender<HolepunchEvent>>,
     listen: bool,
 }
 
@@ -183,9 +184,14 @@ impl ClientChanInner {
                     chan.send(Err(NewChannelError::Coord)).ok();
                     Ok(())
                 }
-                CertReq(peer, sid, cert) => {
+                CertReq(peer, sid, cert, addr) => {
                     if self.listen {
                         self.to_send.push_back(CertOk(peer.clone(), sid));
+                        if let Some(holepunch_sender) = self.holepunch_sender.as_mut() {
+                            holepunch_sender
+                                .unbounded_send(addr)
+                                .or(Err(ClientChanError::OtherDriverHup))?;
+                        }
                         self.ichan_sender
                             .unbounded_send(IncomingChannelsEvent::Certificate(peer, cert))
                             .or(Err(ClientChanError::OtherDriverHup))
@@ -239,6 +245,7 @@ impl ClientChanRef {
         conn: ConecConn,
         ctrl: CtrlStream,
         ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
+        holepunch_sender: Option<mpsc::UnboundedSender<HolepunchEvent>>,
         listen: bool,
     ) -> Self {
         Self(Arc::new(Mutex::new(ClientChanInner {
@@ -252,6 +259,7 @@ impl ClientChanRef {
             flushing: false,
             keepalive: None,
             ichan_sender,
+            holepunch_sender,
             listen,
         })))
     }
@@ -278,6 +286,9 @@ impl Drop for ClientChanDriver {
         inner.new_channels.clear();
         inner.keepalive.take();
         inner.ichan_sender.close_channel();
+        if let Some(holepunch_sender) = inner.holepunch_sender.take() {
+            holepunch_sender.close_channel();
+        }
     }
 }
 

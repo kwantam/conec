@@ -79,11 +79,12 @@
         - less magical version: only use client channel if one is already open
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
-    - [ ] NAT ~detection~ traversal
+    - [x] NAT ~detection~ traversal
         - probably not so hard: clone UdpSocket, send a few packets on a timer
           when we try to connect directly to another client. This should work
           for most cases that are not symmetric NATs.
         - even without this, full-cone NAT traversal will already work
+        - [ ] TEST!!!
     - [ ] more `tracing`
     - [ ] carefully recheck drop notifications for critical pieces of Coord/Chan
 - questions / maybes

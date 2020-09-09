@@ -328,6 +328,8 @@ mod consts {
     pub(crate) const MAX_LOOPS: usize = 8;
     pub(crate) const VERSION: &str = "CONEC_V0.0.13";
     pub(crate) const STRICT_CTRL: bool = true;
+    pub(crate) const HOLEPUNCH_MILLIS: u64 = 100;
+    pub(crate) const HOLEPUNCH_NPKTS: usize = 30;
 }
 
 /// Re-exports from quinn
