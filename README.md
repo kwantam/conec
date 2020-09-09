@@ -87,6 +87,7 @@
         - [ ] TEST!!!
     - [ ] more `tracing`
     - [ ] carefully recheck drop notifications for critical pieces of Coord/Chan
+    - [ ] Coordinator: restrict to non-proxying behavior (sage resource usage / "global coordinator" mode)?
 - questions / maybes
     - [x] Client driver - what is the API for this? one driver for whole client?
     - [x] better Client naming (name by pubkey? but only if not ephemeral...)
