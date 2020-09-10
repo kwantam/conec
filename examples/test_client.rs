@@ -7,32 +7,16 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use anyhow::Context;
 use conec::{Client, ClientConfig};
 use futures::{future, prelude::*};
-use std::{env::args, fs, io, path::PathBuf};
+use std::{env::args, path::PathBuf};
 use tokio::io::AsyncBufReadExt;
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 
-fn get_cert_paths() -> (PathBuf, PathBuf) {
+fn get_cert_path() -> PathBuf {
     let dir = directories_next::ProjectDirs::from("am.kwant", "conec", "conec-tests").unwrap();
     let path = dir.data_local_dir();
-    let cert_path = path.join("cert.der");
-    let key_path = path.join("key.der");
-    match fs::read(&cert_path) {
-        Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
-            println!("generating self-signed cert");
-            let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-            let key = cert.serialize_private_key_der();
-            let cert = cert.serialize_der().unwrap();
-            fs::create_dir_all(&path).context("failed to create cert dir").unwrap();
-            fs::write(&cert_path, &cert).context("failed to write cert").unwrap();
-            fs::write(&key_path, &key).context("failed to write key").unwrap();
-        }
-        Ok(_) => (),
-        _ => panic!("could not stat file {:?}", cert_path),
-    }
-    (cert_path, key_path)
+    path.join("cert.der")
 }
 
 fn main() {
@@ -51,7 +35,7 @@ fn main() {
     let id = args.pop().unwrap();
     let server = args.pop().unwrap();
 
-    let (cpath, _) = get_cert_paths();
+    let cpath = get_cert_path();
     let mut cfg = ClientConfig::new(id, server);
     cfg.set_ca_from_file(&cpath).unwrap();
 

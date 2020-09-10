@@ -9,9 +9,9 @@
 
 use anyhow::Context;
 use conec::{Coord, CoordConfig};
-use std::{fs, io, path::PathBuf};
+use std::{env::args, fs, io, path::PathBuf};
 
-fn get_cert_paths() -> (PathBuf, PathBuf) {
+fn get_cert_paths(server_name: Option<String>) -> (PathBuf, PathBuf) {
     let dir = directories_next::ProjectDirs::from("am.kwant", "conec", "conec-tests").unwrap();
     let path = dir.data_local_dir();
     let cert_path = path.join("cert.der");
@@ -19,7 +19,12 @@ fn get_cert_paths() -> (PathBuf, PathBuf) {
     match fs::read(&cert_path) {
         Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
             println!("generating self-signed cert");
-            let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            let hostnames = {
+                let mut tmp: Vec<String> = server_name.into_iter().collect();
+                tmp.push("localhost".into());
+                tmp
+            };
+            let cert = rcgen::generate_simple_self_signed(hostnames).unwrap();
             let key = cert.serialize_private_key_der();
             let cert = cert.serialize_der().unwrap();
             fs::create_dir_all(&path).context("failed to create cert dir").unwrap();
@@ -33,7 +38,8 @@ fn get_cert_paths() -> (PathBuf, PathBuf) {
 }
 
 fn main() {
-    let (cpath, kpath) = get_cert_paths();
+    let server_name = args().nth(1);
+    let (cpath, kpath) = get_cert_paths(server_name);
     let mut cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
     cfg.enable_stateless_retry();
     run_coord(cfg)
