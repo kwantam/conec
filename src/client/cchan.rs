@@ -9,7 +9,7 @@
 
 use super::ichan::IncomingChannelsEvent;
 use super::istream::{IncomingStreamsInner, NewInStream, StreamId};
-use super::{ConnectingOutStreamHandle, OutStreamError};
+use super::{ConnectingStreamError, ConnectingStreamHandle};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{outstream_init, ConecConn, ControlMsg, CtrlStream};
 use crate::util;
@@ -221,12 +221,12 @@ pub(super) struct ClientClientChan(pub(super) ClientClientChanRef);
 impl ClientClientChan {
     // XXX should sid also be unique w.r.t. proxied streams?
     //     maybe: push uniqueness check up into Client?
-    pub(super) fn new_stream(&self, sid: u64, handle: ConnectingOutStreamHandle) {
+    pub(super) fn new_stream(&self, sid: u64, handle: ConnectingStreamHandle) {
         let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.sids.contains(&sid) {
-            handle.send(Err(OutStreamError::StreamId)).ok();
+            handle.send(Err(ConnectingStreamError::StreamId)).ok();
         } else {
             inner.sids.insert(sid);
             let bi = inner.conn.open_bi();
@@ -234,7 +234,7 @@ impl ClientClientChan {
             tokio::spawn(async move {
                 handle
                     .send(
-                        bi.err_into::<OutStreamError>()
+                        bi.err_into::<ConnectingStreamError>()
                             .and_then(|(send, recv)| async {
                                 outstream_init(send, id, sid)
                                     .await

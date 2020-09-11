@@ -10,7 +10,7 @@
 use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
 use super::chan::ConnectingChannelHandle;
 use super::NewInStream;
-use super::{ConnectingOutStream, ConnectingOutStreamHandle, OutStreamError};
+use super::{ConnectingStream, ConnectingStreamError, ConnectingStreamHandle};
 use crate::consts::MAX_LOOPS;
 use crate::types::{ConecConn, ConecConnError, ControlMsg, CtrlStream};
 
@@ -129,7 +129,7 @@ pub(super) enum IncomingChannelsEvent {
     ),
     ChanClose(String, Option<ClosingChannelHandle>),
     NewChannel(String, SocketAddr, Vec<u8>, ConnectingChannelHandle),
-    NewStream(String, u64, ConnectingOutStreamHandle),
+    NewStream(String, u64, ConnectingStreamHandle),
 }
 
 enum ChanHandle {
@@ -256,7 +256,7 @@ impl IncomingChannelsInner {
                                     .unbounded_send(event)
                                     .map_err(|e| {
                                         if let NewStream(_, _, handle) = e.into_inner() {
-                                            handle.send(Err(OutStreamError::Event)).ok();
+                                            handle.send(Err(ConnectingStreamError::Event)).ok();
                                         } else {
                                             unreachable!()
                                         }
@@ -341,7 +341,7 @@ impl IncomingChannelsInner {
                             queue.push(NewStream(peer, sid, handle));
                         }
                         _ => {
-                            handle.send(Err(OutStreamError::NoSuchPeer(peer))).ok();
+                            handle.send(Err(ConnectingStreamError::NoSuchPeer(peer))).ok();
                         }
                     };
                 }
@@ -423,7 +423,7 @@ impl IncomingChannels {
         Self { inner, sender }
     }
 
-    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingOutStream {
+    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingStream {
         use IncomingChannelsEvent::NewStream;
 
         let (sender, receiver) = oneshot::channel();
@@ -431,14 +431,14 @@ impl IncomingChannels {
             .unbounded_send(NewStream(to, sid, sender))
             .map_err(|e| {
                 if let NewStream(_, _, sender) = e.into_inner() {
-                    sender.send(Err(OutStreamError::Event)).ok();
+                    sender.send(Err(ConnectingStreamError::Event)).ok();
                 } else {
                     unreachable!()
                 }
             })
             .ok();
 
-        ConnectingOutStream(receiver)
+        ConnectingStream(receiver)
     }
 
     pub(super) fn close_channel(&self, peer: String) -> ClosingChannel {

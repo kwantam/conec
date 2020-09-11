@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::ichan::{IncomingChannelsEvent, NewChannelError};
-use super::{ConnectingOutStream, ConnectingOutStreamHandle, HolepunchEvent, OutStreamError};
+use super::{ConnectingStream, ConnectingStreamError, ConnectingStreamHandle, HolepunchEvent};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{ConecConn, ControlMsg, CtrlStream, StreamTo};
 use crate::util;
@@ -73,7 +73,7 @@ pub(super) struct ClientChanInner {
     ref_count: usize,
     driver: Option<Waker>,
     to_send: VecDeque<ControlMsg>,
-    new_streams: HashMap<u64, Option<ConnectingOutStreamHandle>>,
+    new_streams: HashMap<u64, Option<ConnectingStreamHandle>>,
     new_channels: HashMap<u64, Option<(String, ConnectingChannelHandle)>>,
     flushing: bool,
     keepalive: Option<Interval>,
@@ -89,21 +89,21 @@ impl ClientChanInner {
         }
     }
 
-    fn new_stream(&mut self, chan: ConnectingOutStreamHandle, sid: StreamTo) {
+    fn new_stream(&mut self, chan: ConnectingStreamHandle, sid: StreamTo) {
         let bi = self.conn.open_bi();
         tokio::spawn(async move {
             chan.send(
                 async {
                     // get the new stream
-                    let (send, recv) = bi.await.map_err(OutStreamError::OpenBi)?;
+                    let (send, recv) = bi.await.map_err(ConnectingStreamError::OpenBi)?;
 
                     // write sid to it
                     let mut write_stream = SymmetricallyFramed::new(
                         FramedWrite::new(send, LengthDelimitedCodec::new()),
                         SymmetricalBincode::<StreamTo>::default(),
                     );
-                    write_stream.send(sid).await.map_err(OutStreamError::InitMsg)?;
-                    write_stream.flush().await.map_err(OutStreamError::Flush)?;
+                    write_stream.send(sid).await.map_err(ConnectingStreamError::InitMsg)?;
+                    write_stream.flush().await.map_err(ConnectingStreamError::Flush)?;
 
                     // send resulting OutStream and InStream to the receiver
                     let outstream = write_stream.into_inner();
@@ -176,7 +176,7 @@ impl ClientChanInner {
                 }
                 NewStreamErr(sid) | NewBroadcastErr(sid) => {
                     let chan = Self::get_new_str_or_ch(sid, &mut self.new_streams)?;
-                    chan.send(Err(OutStreamError::Coord)).ok();
+                    chan.send(Err(ConnectingStreamError::Coord)).ok();
                     Ok(())
                 }
                 NewChannelErr(sid) => {
@@ -297,21 +297,21 @@ pub(super) struct ClientChan(pub(super) ClientChanRef);
 // XXX should we do this asynchronously via a channel instead?
 //     lock contention on a client channel seems like it should be low
 impl ClientChan {
-    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingOutStream {
+    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingStream {
         // the new stream future is a channel that will contain the resulting stream
         let (sender, receiver) = oneshot::channel();
         let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.new_streams.get(&sid).is_some() {
-            sender.send(Err(OutStreamError::StreamId)).ok();
+            sender.send(Err(ConnectingStreamError::StreamId)).ok();
         } else {
             inner.to_send.push_back(ControlMsg::NewStreamReq(to, sid));
             inner.new_streams.insert(sid, Some(sender));
             inner.wake();
         }
 
-        ConnectingOutStream(receiver)
+        ConnectingStream(receiver)
     }
 
     pub(super) fn new_channel(&self, to: String, sid: u64) -> ConnectingChannel {
@@ -330,19 +330,19 @@ impl ClientChan {
         ConnectingChannel(receiver)
     }
 
-    pub(super) fn new_broadcast(&self, chan: String, sid: u64) -> ConnectingOutStream {
+    pub(super) fn new_broadcast(&self, chan: String, sid: u64) -> ConnectingStream {
         let (sender, receiver) = oneshot::channel();
         let mut inner = self.0.lock().unwrap();
 
         // make sure this stream hasn't already been used
         if inner.new_streams.get(&sid).is_some() {
-            sender.send(Err(OutStreamError::StreamId)).ok();
+            sender.send(Err(ConnectingStreamError::StreamId)).ok();
         } else {
             inner.to_send.push_back(ControlMsg::NewBroadcastReq(chan, sid));
             inner.new_streams.insert(sid, Some(sender));
             inner.wake();
         }
 
-        ConnectingOutStream(receiver)
+        ConnectingStream(receiver)
     }
 }

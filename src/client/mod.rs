@@ -16,17 +16,20 @@ See [library documentation](../index.html) for more info on how to instantiate a
 mod cchan;
 pub(crate) mod chan;
 pub(crate) mod config;
+mod connstream;
 mod holepunch;
 mod ichan;
 mod istream;
 mod tls;
 
 use crate::consts::ALPN_CONEC;
-use crate::types::{ConecConn, ConecConnError, InStream, OutStream};
+use crate::types::{ConecConn, ConecConnError};
 use crate::Coord;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
+use connstream::ConnectingStreamHandle;
+pub use connstream::{ConnectingStream, ConnectingStreamError};
 use holepunch::{Holepunch, HolepunchDriver, HolepunchEvent, HolepunchRef};
 pub use ichan::{ClosingChannel, IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
@@ -34,57 +37,9 @@ pub use istream::{IncomingStreams, NewInStream, StreamId};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 
 use err_derive::Error;
-use futures::{
-    channel::{mpsc, oneshot},
-    future::Then,
-    prelude::*,
-};
-use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, ConnectionError, Endpoint, EndpointError, ParseError};
-use std::io;
+use futures::channel::mpsc;
+use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, Endpoint, EndpointError, ParseError};
 use std::net::UdpSocket;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-/// Error variant output by [ConnectingOutStream] future
-#[derive(Debug, Error)]
-pub enum OutStreamError {
-    /// Error injecting event
-    #[error(display = "Could not send event")]
-    Event,
-    /// Coordinator sent us an error
-    #[error(display = "Coordinator responded with error")]
-    Coord,
-    /// Reused stream id
-    #[error(display = "Reused stream id")]
-    StreamId,
-    /// Failed to send initial message
-    #[error(display = "Sending initial message: {:?}", _0)]
-    InitMsg(#[error(source, no_from)] io::Error),
-    /// Failed to flush initial message
-    #[error(display = "Flushing init message: {:?}", _0)]
-    Flush(#[error(source, no_from)] io::Error),
-    /// Failed to open bidirectional channel
-    #[error(display = "Opening bidirectional channel: {:?}", _0)]
-    OpenBi(#[source] ConnectionError),
-    /// Opening channel was canceled
-    #[error(display = "Outgoing connection canceled: {:?}", _0)]
-    Canceled(#[source] oneshot::Canceled),
-    /// OutStream requested for invalid peer name
-    #[error(display = "No such peer: {:?}", _0)]
-    NoSuchPeer(String),
-    /// Failed to initialize stream
-    #[error(display = "Stream initialization: {:?}", _0)]
-    InitStream(#[source] io::Error),
-}
-def_into_error!(OutStreamError);
-
-def_cs_future!(
-    ConnectingOutStream,
-    ConnectingOutStreamHandle,
-    (OutStream, InStream),
-    OutStreamError,
-    doc = "An outgoing stream that is connecting"
-);
 
 /// Client::new constructor errors
 #[derive(Debug, Error)]
@@ -240,7 +195,7 @@ impl Client {
     }
 
     /// Open a new stream to another client, proxied through the Coordinator
-    pub fn new_proxied_stream(&mut self, to: String) -> ConnectingOutStream {
+    pub fn new_proxied_stream(&mut self, to: String) -> ConnectingStream {
         self.new_x_stream(to, StreamId::Proxied)
     }
 
@@ -249,11 +204,11 @@ impl Client {
     /// It is only possible to open another stream to a client for which there is
     /// an open channel, either because that client connected to this one or because
     /// this client called [Client::new_channel].
-    pub fn new_direct_stream(&mut self, to: String) -> ConnectingOutStream {
+    pub fn new_direct_stream(&mut self, to: String) -> ConnectingStream {
         self.new_x_stream(to, StreamId::Direct)
     }
 
-    fn new_x_stream<F>(&mut self, to: String, as_id: F) -> ConnectingOutStream
+    fn new_x_stream<F>(&mut self, to: String, as_id: F) -> ConnectingStream
     where
         F: FnOnce(u64) -> StreamId,
     {
@@ -271,7 +226,7 @@ impl Client {
     /// If mixing calls to this function with calls to [Client::new_proxied_stream] or
     /// [Client::new_direct_stream], avoid using `sid >= 1<<63`, since these values are
     /// used automatically by those functions.
-    pub fn new_stream_with_id(&self, to: String, sid: StreamId) -> ConnectingOutStream {
+    pub fn new_stream_with_id(&self, to: String, sid: StreamId) -> ConnectingStream {
         match sid {
             StreamId::Proxied(sid) => self.coord.new_stream(to, sid),
             StreamId::Direct(sid) => self.in_channels.new_stream(to, sid),
@@ -305,12 +260,13 @@ impl Client {
     /// make progress until the slowest receiver drains its incoming buffer. The
     /// [NonblockingInStream](crate::NonblockingInStream) adapter may help to address
     /// this issue.
-    pub fn new_broadcast(&mut self, chan: String) -> ConnectingOutStream {
+    pub fn new_broadcast(&mut self, chan: String) -> ConnectingStream {
         let ctr = self.ctr;
         self.ctr += 1;
         self.coord.new_broadcast(chan, ctr)
     }
 
+    /*
     /// Open a new stream to another client
     ///
     /// This function first attempts to open a direct stream to the client and then,
@@ -321,11 +277,14 @@ impl Client {
             _ => self.new_proxied_stream(to),
         }))
     }
+    */
 }
 
-/// The type returned by [Client::new_stream]. For all purposes a [ConnectingOutStream].
+/*
+/// The type returned by [Client::new_stream]. For all purposes a [ConnectingStream].
 pub type ConnectingStream<'a> = Then<
     ConnectingChannel,
-    ConnectingOutStream,
-    Box<dyn FnOnce(<ConnectingChannel as Future>::Output) -> ConnectingOutStream + 'a>,
+    ConnectingStream,
+    Box<dyn FnOnce(<ConnectingChannel as Future>::Output) -> ConnectingStream + 'a>,
 >;
+*/

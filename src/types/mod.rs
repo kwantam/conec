@@ -14,7 +14,7 @@ mod ctrlstream;
 pub(crate) mod nbistream;
 pub(crate) mod tagstream;
 
-use crate::client::OutStreamError;
+use crate::client::ConnectingStreamError;
 pub(crate) use conn::ConecConn;
 pub use conn::ConecConnError;
 pub(crate) use ctrlstream::CtrlStream;
@@ -33,7 +33,11 @@ pub type InStream = FramedRead<RecvStream, LengthDelimitedCodec>;
 /// Sending end of a data stream: a [Sink](futures::sink::Sink) that accepts [Bytes](bytes::Bytes).
 pub type OutStream = FramedWrite<SendStream, LengthDelimitedCodec>;
 
-pub(crate) async fn outstream_init(send: SendStream, from: String, sid: u64) -> Result<OutStream, OutStreamError> {
+pub(crate) async fn outstream_init(
+    send: SendStream,
+    from: String,
+    sid: u64,
+) -> Result<OutStream, ConnectingStreamError> {
     let mut write_stream = SymmetricallyFramed::new(
         FramedWrite::new(send, LengthDelimitedCodec::new()),
         SymmetricalBincode::<(String, u64)>::default(),
