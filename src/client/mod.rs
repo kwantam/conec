@@ -36,6 +36,7 @@ use istream::{IncomingStreamsDriver, IncomingStreamsRef};
 use err_derive::Error;
 use futures::{
     channel::{mpsc, oneshot},
+    future::Then,
     prelude::*,
 };
 use quinn::{crypto::rustls::TLSError, ClientConfigBuilder, ConnectionError, Endpoint, EndpointError, ParseError};
@@ -309,4 +310,22 @@ impl Client {
         self.ctr += 1;
         self.coord.new_broadcast(chan, ctr)
     }
+
+    /// Open a new stream to another client
+    ///
+    /// This function first attempts to open a direct stream to the client and then,
+    /// if that fails, falls back to a proxied stream through the Coordinator.
+    pub fn new_stream<F>(&mut self, to: String) -> ConnectingStream<'_> {
+        self.new_channel(to.clone()).then(Box::new(move |res| match res {
+            Ok(()) | Err(NewChannelError::Duplicate) => self.new_direct_stream(to),
+            _ => self.new_proxied_stream(to),
+        }))
+    }
 }
+
+/// The type returned by [Client::new_stream]. For all purposes a [ConnectingOutStream].
+pub type ConnectingStream<'a> = Then<
+    ConnectingChannel,
+    ConnectingOutStream,
+    Box<dyn FnOnce(<ConnectingChannel as Future>::Output) -> ConnectingOutStream + 'a>,
+>;
