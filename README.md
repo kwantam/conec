@@ -67,7 +67,7 @@
         - [x] who owns Endpoint? Clone in ichan? ((( Option<> in Client? )))
         - [x] allow Client to connect even though it is not listening
         - [x] allow Client to close a channel to another client
-            - seems like there is a bug somewhere---possibly in quinn or rustls---that close/reopen triggers
+            - seems like there is a bug somewhere---quinn? rustls?---that close/reopen triggers
             - [ ] investigate this bug!
     - [x] broadcast streams for Clients
     - [x] ~broadcast streams for Coordinator?~
@@ -79,15 +79,10 @@
         - less magical version: only use client channel if one is already open
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
-    - [x] NAT ~detection~ traversal
-        - probably not so hard: clone UdpSocket, send a few packets on a timer
-          when we try to connect directly to another client. This should work
-          for most cases that are not symmetric NATs.
-        - even without this, full-cone NAT traversal will already work
-        - [ ] TEST!!!
+    - [x] NAT traversal
+        - holepunching works in my one-off tests. Can we test automatically?
     - [ ] more `tracing`
     - [ ] carefully recheck drop notifications for critical pieces of Coord/Chan
-    - [ ] Coordinator: restrict to non-proxying behavior (sage resource usage / "global coordinator" mode)?
 - questions / maybes
     - [x] Client driver - what is the API for this? one driver for whole client?
     - [x] better Client naming (name by pubkey? but only if not ephemeral...)
