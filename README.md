@@ -75,8 +75,6 @@
         - v0.0.12: remove Coordinator-side stream support
     - [x] Broadcast: identify the sending client?
     - [ ] add intf to automagically pick between client-to-client and proxied streams
-        - super magical version: automatically initiate a new client channel
-        - less magical version: only use client channel if one is already open
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
     - [x] NAT traversal
