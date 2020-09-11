@@ -199,6 +199,76 @@ fn test_stream_bi() {
 }
 
 #[test]
+fn test_new_stream() {
+    let (cpath, kpath) = get_cert_paths();
+    let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
+    rt.block_on(async move {
+        // start server
+        let coord = {
+            let mut coord_cfg = CoordConfig::new_from_file(&cpath, &kpath).unwrap();
+            coord_cfg.enable_stateless_retry();
+            coord_cfg.set_port(0); // auto assign
+            Coord::new(coord_cfg).await.unwrap()
+        };
+        let port = coord.local_addr().port();
+
+        // start client 1
+        let (mut client1, _inc1) = {
+            let mut client_cfg = ClientConfig::new("client1".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 2
+        let (_client2, mut inc2) = {
+            let mut client_cfg = ClientConfig::new("client2".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        // start client 3
+        let (_client3, mut inc3) = {
+            let mut client_cfg = ClientConfig::new("client3".to_string(), "localhost".to_string());
+            client_cfg.set_ca_from_file(&cpath).unwrap();
+            client_cfg.set_port(port);
+            client_cfg.disable_listen();
+            Client::new(client_cfg.clone()).await.unwrap()
+        };
+
+        assert_eq!(coord.num_clients(), 3);
+
+        // open stream to client2
+        let (mut s12, mut r21) = client1.new_stream("client2".to_string()).await.unwrap();
+        let (clt2, sid2, mut s21, mut r12) = inc2.next().await.unwrap();
+        assert_eq!(&clt2, "client1");
+        assert!(sid2.is_direct());
+        let to_send = Bytes::from("ping pong");
+        s12.send(to_send.clone()).await.unwrap();
+        let rec = r12.try_next().await?.unwrap().freeze();
+        s21.send(rec).await.unwrap();
+        let rec = r21.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+
+        // open stream to client3
+        let (mut s13, mut r31) = client1.new_stream("client3".to_string()).await.unwrap();
+        let (clt3, sid3, mut s31, mut r13) = inc3.next().await.unwrap();
+        assert_eq!(&clt3, "client1");
+        assert!(sid3.is_proxied());
+        let to_send = Bytes::from("ping pong");
+        s13.send(to_send.clone()).await.unwrap();
+        let rec = r13.try_next().await?.unwrap().freeze();
+        s31.send(rec).await.unwrap();
+        let rec = r31.try_next().await?.unwrap();
+        assert_eq!(to_send, rec);
+
+        Ok(()) as Result<(), std::io::Error>
+    })
+    .ok();
+}
+
+#[test]
 fn test_stream_block_nonblock() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
