@@ -365,9 +365,9 @@ impl ClientChan {
         F: Fn(String, u64, ConnectingStreamHandle) -> ClientChanEvent,
     {
         use ClientChanEvent::*;
-        let (sender, receiver) = oneshot::channel();
+        let (res, sender) = ConnectingStream::new(None);
         self.sender
-            .unbounded_send(cons_msg(to, sid, sender))
+            .unbounded_send(cons_msg(to, sid, sender.unwrap())) // unwrap is safe because we called new(None)
             .map_err(|e| {
                 let sender = match e.into_inner() {
                     Stream(_, _, sender) | Broadcast(_, _, sender) => sender,
@@ -377,7 +377,7 @@ impl ClientChan {
             })
             .ok();
 
-        ConnectingStream(receiver)
+        res
     }
 
     pub(super) fn new_channel(&self, to: String, sid: u64) -> ConnectingChannel {
@@ -394,5 +394,9 @@ impl ClientChan {
             .ok();
 
         ConnectingChannel(receiver)
+    }
+
+    pub(super) fn get_sender(&self) -> mpsc::UnboundedSender<ClientChanEvent> {
+        self.sender.clone()
     }
 }

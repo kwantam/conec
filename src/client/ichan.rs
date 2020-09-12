@@ -428,10 +428,9 @@ impl IncomingChannels {
 
     pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingStream {
         use IncomingChannelsEvent::NewStream;
-
-        let (sender, receiver) = oneshot::channel();
+        let (res, sender) = ConnectingStream::new(None);
         self.sender
-            .unbounded_send(NewStream(to, sid, sender))
+            .unbounded_send(NewStream(to, sid, sender.unwrap())) // unwrap is safe because we called new(None)
             .map_err(|e| {
                 if let NewStream(_, _, sender) = e.into_inner() {
                     sender.send(Err(ConnectingStreamError::Event)).ok();
@@ -441,7 +440,7 @@ impl IncomingChannels {
             })
             .ok();
 
-        ConnectingStream(receiver)
+        res
     }
 
     pub(super) fn close_channel(&self, peer: String) -> ClosingChannel {
@@ -459,5 +458,9 @@ impl IncomingChannels {
             .ok();
 
         ClosingChannel(receiver)
+    }
+
+    pub(super) fn get_sender(&self) -> mpsc::UnboundedSender<IncomingChannelsEvent> {
+        self.sender.clone()
     }
 }

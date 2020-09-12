@@ -198,7 +198,6 @@ fn test_stream_bi() {
     .ok();
 }
 
-/*
 #[test]
 fn test_new_stream() {
     let (cpath, kpath) = get_cert_paths();
@@ -268,7 +267,6 @@ fn test_new_stream() {
     })
     .ok();
 }
-*/
 
 #[test]
 fn test_stream_block_nonblock() {

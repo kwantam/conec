@@ -266,25 +266,16 @@ impl Client {
         self.coord.new_broadcast(chan, ctr)
     }
 
-    /*
     /// Open a new stream to another client
     ///
     /// This function first attempts to open a direct stream to the client and then,
     /// if that fails, falls back to a proxied stream through the Coordinator.
-    pub fn new_stream<F>(&mut self, to: String) -> ConnectingStream<'_> {
-        self.new_channel(to.clone()).then(Box::new(move |res| match res {
-            Ok(()) | Err(NewChannelError::Duplicate) => self.new_direct_stream(to),
-            _ => self.new_proxied_stream(to),
-        }))
+    pub fn new_stream(&mut self, to: String) -> ConnectingStream {
+        let csnd = self.coord.get_sender();
+        let isnd = self.in_channels.get_sender();
+        let conn_chan = self.new_channel(to.clone());
+        let sid = self.ctr;
+        self.ctr += 1;
+        ConnectingStream::new(Some((conn_chan, csnd, isnd, to, sid))).0
     }
-    */
 }
-
-/*
-/// The type returned by [Client::new_stream]. For all purposes a [ConnectingStream].
-pub type ConnectingStream<'a> = Then<
-    ConnectingChannel,
-    ConnectingStream,
-    Box<dyn FnOnce(<ConnectingChannel as Future>::Output) -> ConnectingStream + 'a>,
->;
-*/
