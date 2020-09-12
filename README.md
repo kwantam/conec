@@ -58,7 +58,7 @@
         - [x] v0.0.12 removes these --- just use a new Client with a well-known name!
             - this ends up being a considerable simplification
     - [x] Client keepalive
-    - [ ] direct Client <-> Client channels
+    - [x] direct Client <-> Client channels
         - [x] incoming channels listener
         - [x] client-to-client channels impl
         - [x] hold channels in ichan
