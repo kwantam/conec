@@ -92,21 +92,25 @@ let (client, istreams) = Client::new(client_cfg).await.unwrap();
 
 # Channels and streams
 
-## Proxied streams
-
 Once your Client has connected to its Coordinator, it can set up
-data streams with other Clients and send data on those streams:
+data streams with other Clients and send data on those streams.
+
+The easiest way to do this is with [Client::new_stream]:
 
 ```ignore
 let (mut to_client2, _from_client2) = client
-    .new_proxied_stream("client2".to_string())
+    .new_stream("client2".to_string())
     .await
     .unwrap();
 to_client2.send(Bytes::from("hi there")).await.unwrap();
 ```
 
-The receiving client first accepts the stream from its
-[client::IncomingStreams] and then reads data from it:
+This method first tries to establish a new [direct stream](#direct-stream),
+initiating a new direct channel to the remote client if necessary. If this
+fails, it falls back to a [proxied stream](#proxied-streams).
+
+All incoming streams (both direct and proxied) are accepted from the
+[client::IncomingStreams] object, after which sent data can be read:
 
 ```ignore
 let (peer, strmid, _to_client1, mut from_client1) = istreams
@@ -120,13 +124,11 @@ let rec = from_client1
     .unwrap();
 ```
 
-The first element of the returned 4-tuple will be `<name>` when the
-peer is a Client called `<name>`.
-
 ## Direct streams
 
 Clients can initiate direct connections to one another with [Client::new_channel],
-after which they can initiate direct streams to the peer.
+after which they can initiate direct streams to the peer. ([Client::new_stream]
+calls [Client::new_channel] automatically.)
 
 ```ignore
 // first, connect a new channel to client2
@@ -143,6 +145,18 @@ to_client2.send(Bytes::from("hi there")).await.unwrap();
 Once two clients share a channel, either client can initiate a direct stream
 to the other. [Client::close_channel] closes the channel, which also closes
 all direct streams between the two clients.
+
+## Proxied streams
+
+Clients can establish proxied streams using [Client::new_proxied_stream]:
+
+```ignore
+let (mut to_client2, _from_client2) = client
+    .new_proxied_stream("client2".to_string())
+    .await
+    .unwrap();
+to_client2.send(Bytes::from("hi there")).await.unwrap();
+```
 
 ## Broadcast streams
 
