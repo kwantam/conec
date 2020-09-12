@@ -39,7 +39,7 @@ impl CoordConfig {
     /// Construct a new coordinator configuration using the given CertificateChainand PrivateKey.
     pub fn new(cert: CertificateChain, key: PrivateKey) -> Self {
         Self {
-            laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), DFLT_PORT),
+            laddr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DFLT_PORT),
             keylog: false,
             stateless_retry: false,
             cert_and_key: (cert, key),
