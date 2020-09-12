@@ -39,7 +39,7 @@
   use multiple data streams instead.
 
 - Control streams are used internally to manage the connection.
-  There user code does not interact with them except via the API
+  The user code does not interact with them except via the API
   (e.g., in most cases opening a data stream entails sending and
   receiving messages on a control stream).
 
