@@ -72,7 +72,7 @@
     - [x] broadcast streams for Clients
     - [x] ~broadcast streams for Coordinator?~
         - no: just connect a Client
-        - v0.0.12: remove Coordinator-side stream support
+        - v0.0.12 removed Coordinator-side stream support
     - [x] Broadcast: identify the sending client?
     - [x] add intf to automagically pick between client-to-client and proxied streams
     - [x] Allow Coord to require trusted CA for client certs
