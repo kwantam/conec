@@ -52,8 +52,6 @@
 - features and improvements
     - [x] for Client futures: `map(|x| x.map_err(FooError))` to get rid of multiple unwraps
     - [x] Client authentication via pubkeys
-        - right now, client connects with ephemeral self-signed cert. once we
-          add client-to-client connections, coord will pass that cert to client.
     - [x] ~direct Client <-> Coord streams~
         - [x] v0.0.12 removes these --- just use a new Client with a well-known name!
             - this ends up being a considerable simplification
