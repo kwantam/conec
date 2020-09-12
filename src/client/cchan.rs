@@ -139,6 +139,7 @@ impl ClientClientChanInner {
     }
 
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), ClientClientChanError> {
+        let mut iters = 0;
         loop {
             let mut keep_going = false;
             self.handle_events(cx)?;
@@ -148,9 +149,16 @@ impl ClientClientChanInner {
                 keep_going |= self.drive_ctrl_send(cx)?;
             }
             if !keep_going {
-                return Ok(());
+                break;
+            }
+            iters += 1;
+            if iters >= MAX_LOOPS {
+                // break to let other threads run, but reschedule
+                cx.waker().wake_by_ref();
+                break;
             }
         }
+        Ok(())
     }
 }
 

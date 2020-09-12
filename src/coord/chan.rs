@@ -278,6 +278,7 @@ impl CoordChanInner {
     }
 
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), CoordChanError> {
+        let mut iters = 0;
         loop {
             let mut keep_going = false;
             keep_going |= self.drive_ctrl_recv(cx)?;
@@ -287,9 +288,16 @@ impl CoordChanInner {
             }
             keep_going |= self.drive_ibi_recv(cx)?;
             if !keep_going {
-                return Ok(());
+                break;
+            }
+            iters += 1;
+            if iters >= MAX_LOOPS {
+                // break to let other threads run, but reschedule
+                cx.waker().wake_by_ref();
+                break;
             }
         }
+        Ok(())
     }
 }
 

@@ -135,13 +135,21 @@ impl IncomingStreamsInner {
     }
 
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), IncomingStreamsError> {
+        let mut iters = 0;
         loop {
             self.handle_events(cx)?;
             let keep_going = self.drive_streams_recv(cx)?;
             if !keep_going {
-                return Ok(());
+                break;
+            }
+            iters += 1;
+            if iters >= MAX_LOOPS {
+                // break to let other threads run, but reschedule
+                cx.waker().wake_by_ref();
+                break;
             }
         }
+        Ok(())
     }
 }
 
