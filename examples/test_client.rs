@@ -44,16 +44,30 @@ fn main() {
 
 #[tokio::main]
 async fn run_client(cfg: ClientConfig, peer: String, initiate: bool) {
+    use std::io::{stderr, Write};
+    eprint!("*** Connecting to coordinator... ");
+    stderr().flush().unwrap();
     let (mut client, mut incoming) = Client::new(cfg).await.unwrap();
+    eprintln!("Done.");
 
     let (send, recv) = if initiate {
+        eprint!("*** Connecting to peer... ");
+        stderr().flush().unwrap();
         client.new_channel(peer.clone()).await.unwrap();
-        client.new_direct_stream(peer).await.unwrap()
+        eprint!("Channel connected... ");
+        stderr().flush().unwrap();
+        let ret = client.new_direct_stream(peer).await.unwrap();
+        eprintln!("Stream connected.");
+        ret
     } else {
+        eprint!("*** Waiting to receive stream from peer... ");
+        stderr().flush().unwrap();
         let (_, _, send, recv) = incoming.next().await.unwrap();
+        eprintln!("Received.");
         (send, recv)
     };
 
+    eprintln!("Go ahead and type.");
     let rfut = SymmetricallyFramed::new(recv, SymmetricalBincode::<String>::default()).for_each(|s| {
         println!("---> {}", s.unwrap());
         future::ready(())
@@ -62,8 +76,8 @@ async fn run_client(cfg: ClientConfig, peer: String, initiate: bool) {
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let sfut = stdin
         .lines()
-        .forward(SymmetricallyFramed::new(send, SymmetricalBincode::<String>::default()));
+        .forward(SymmetricallyFramed::new(send, SymmetricalBincode::<String>::default()))
+        .then(|sf| async { sf.ok(); eprintln!("*** STDIN closed."); });
 
-    let (sf, _) = futures::future::join(sfut, rfut).await;
-    sf.ok();
+    futures::future::join(sfut, rfut).await;
 }
