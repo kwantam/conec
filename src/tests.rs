@@ -241,9 +241,12 @@ fn test_new_stream() {
 
         // open stream to client2
         let (mut s12, mut r21) = client1.new_stream("client2".to_string()).await.unwrap();
+        let (_s12, _r21) = client1.new_stream("client2".to_string()).await.unwrap();
         let (clt2, sid2, mut s21, mut r12) = inc2.next().await.unwrap();
+        let (_, sid2x, _s21, _r12) = inc2.next().await.unwrap();
         assert_eq!(&clt2, "client1");
         assert!(sid2.is_direct());
+        assert!(sid2x.is_direct());
         let to_send = Bytes::from("ping pong");
         s12.send(to_send.clone()).await.unwrap();
         let rec = r12.try_next().await?.unwrap().freeze();

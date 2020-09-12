@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::cchan::{ClientClientChan, ClientClientChanDriver, ClientClientChanRef};
-use super::chan::ConnectingChannelHandle;
+use super::chan::ClientChanEvent;
 use super::NewInStream;
 use super::{ConnectingStream, ConnectingStreamError, ConnectingStreamHandle};
 use crate::consts::MAX_LOOPS;
@@ -120,6 +120,16 @@ pub enum NewChannelError {
 }
 def_into_error!(NewChannelError);
 
+def_cs_future!(
+    ConnectingChannel,
+    pub(crate),
+    ConnectingChannelHandle,
+    pub(self),
+    (),
+    NewChannelError,
+    doc = "A direct channel to a Client that is currently connecting"
+);
+
 pub(super) enum IncomingChannelsEvent {
     Certificate(String, Vec<u8>),
     Accepted(ConecConn, CtrlStream, IncomingBiStreams, String),
@@ -133,6 +143,7 @@ pub(super) enum IncomingChannelsEvent {
     ChanClose(String, Option<ClosingChannelHandle>),
     NewChannel(String, SocketAddr, Vec<u8>, ConnectingChannelHandle),
     NewStream(String, u64, ConnectingStreamHandle),
+    ChanInit(String, u64, ConnectingChannelHandle),
 }
 
 enum ChanHandle {
@@ -154,6 +165,7 @@ pub(super) struct IncomingChannelsInner {
     events: mpsc::UnboundedReceiver<IncomingChannelsEvent>,
     client_config: ClientConfig,
     client_ca: Option<Certificate>,
+    chan_sender: mpsc::UnboundedSender<ClientChanEvent>,
 }
 
 impl IncomingChannelsInner {
@@ -278,6 +290,21 @@ impl IncomingChannelsInner {
                         };
                     }
                 }
+                ChanInit(peer, _, handle) if self.chans.get(&peer).is_some() => {
+                    handle.send(Err(NewChannelError::Duplicate)).ok();
+                }
+                ChanInit(peer, sid, handle) => {
+                    self.chan_sender
+                        .unbounded_send(ClientChanEvent::Channel(peer, sid, handle))
+                        .map_err(|e| {
+                            if let ClientChanEvent::Channel(_, _, handle) = e.into_inner() {
+                                handle.send(Err(NewChannelError::Event)).ok();
+                            } else {
+                                unreachable!()
+                            }
+                        })
+                        .ok();
+                }
                 NewChannel(peer, _, _, handle) if self.chans.get(&peer).is_some() => {
                     handle.send(Err(NewChannelError::Duplicate)).ok();
                 }
@@ -371,6 +398,7 @@ impl IncomingChannelsInner {
 
 def_ref!(IncomingChannelsInner, IncomingChannelsRef);
 impl IncomingChannelsRef {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         endpoint: Endpoint,
         id: String,
@@ -379,6 +407,7 @@ impl IncomingChannelsRef {
         strm_out: mpsc::UnboundedSender<NewInStream>,
         client_config: ClientConfig,
         client_ca: Option<Certificate>,
+        chan_sender: mpsc::UnboundedSender<ClientChanEvent>,
     ) -> (Self, mpsc::UnboundedSender<IncomingChannelsEvent>) {
         let (sender, events) = mpsc::unbounded();
         (
@@ -396,6 +425,7 @@ impl IncomingChannelsRef {
                 events,
                 client_config,
                 client_ca,
+                chan_sender,
             }))),
             sender,
         )
@@ -424,6 +454,22 @@ pub(super) struct IncomingChannels {
 impl IncomingChannels {
     pub(super) fn new(inner: IncomingChannelsRef, sender: mpsc::UnboundedSender<IncomingChannelsEvent>) -> Self {
         Self { inner, sender }
+    }
+
+    pub(super) fn new_channel(&self, to: String, sid: u64) -> ConnectingChannel {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .unbounded_send(IncomingChannelsEvent::ChanInit(to, sid, sender))
+            .map_err(|e| {
+                if let IncomingChannelsEvent::ChanInit(_, _, sender) = e.into_inner() {
+                    sender.send(Err(NewChannelError::Event)).ok();
+                } else {
+                    unreachable!()
+                }
+            })
+            .ok();
+
+        ConnectingChannel(receiver)
     }
 
     pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingStream {

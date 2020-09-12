@@ -25,13 +25,13 @@ mod tls;
 use crate::consts::ALPN_CONEC;
 use crate::types::{ConecConn, ConecConnError};
 use crate::Coord;
+pub use chan::ClientChanError;
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
-pub use chan::{ClientChanError, ConnectingChannel};
 use config::{CertGenError, ClientConfig};
 use connstream::ConnectingStreamHandle;
 pub use connstream::{ConnectingStream, ConnectingStreamError};
 use holepunch::{Holepunch, HolepunchDriver, HolepunchEvent, HolepunchRef};
-pub use ichan::{ClosingChannel, IncomingChannelsError, NewChannelError};
+pub use ichan::{ClosingChannel, ConnectingChannel, IncomingChannelsError, NewChannelError};
 use ichan::{IncomingChannels, IncomingChannelsDriver, IncomingChannelsRef};
 pub use istream::{IncomingStreams, NewInStream, StreamId};
 use istream::{IncomingStreamsDriver, IncomingStreamsRef};
@@ -143,6 +143,7 @@ impl Client {
         let (stream_sender, incoming_streams) = mpsc::unbounded();
 
         // incoming channels listener
+        let (chan_sender, chan_events) = mpsc::unbounded(); // ClientChan events channel
         let (in_channels, ichan_sender) = {
             let (inner, sender) = IncomingChannelsRef::new(
                 endpoint,
@@ -152,6 +153,7 @@ impl Client {
                 stream_sender.clone(),
                 qcc,
                 config.client_ca,
+                chan_sender.clone(),
             );
             let driver = IncomingChannelsDriver(inner.clone());
             tokio::spawn(async move { driver.await });
@@ -169,10 +171,10 @@ impl Client {
 
         // client-coordinator channel
         let coord = {
-            let (inner, sender) = ClientChanRef::new(conn, ctrl, ichan_sender, holepunch_sender, config.listen);
+            let inner = ClientChanRef::new(conn, ctrl, ichan_sender, holepunch_sender, chan_events, config.listen);
             let driver = ClientChanDriver::new(inner.clone(), config.keepalive);
             tokio::spawn(async move { driver.await });
-            ClientChan::new(inner, sender)
+            ClientChan::new(inner, chan_sender)
         };
 
         // set up the incoming streams listener
@@ -240,7 +242,7 @@ impl Client {
     pub fn new_channel(&mut self, to: String) -> ConnectingChannel {
         let ctr = self.ctr;
         self.ctr += 1;
-        self.coord.new_channel(to, ctr)
+        self.in_channels.new_channel(to, ctr)
     }
 
     /// Close an open channel

@@ -11,8 +11,8 @@
 This module defines the future used by connecting streams.
 */
 
-use super::chan::{ClientChanEvent, ConnectingChannel};
-use super::ichan::{IncomingChannelsEvent, NewChannelError};
+use super::chan::ClientChanEvent;
+use super::ichan::{ConnectingChannel, IncomingChannelsEvent, NewChannelError};
 use crate::types::{InStream, OutStream};
 
 use err_derive::Error;

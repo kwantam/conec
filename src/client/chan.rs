@@ -7,17 +7,14 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::ichan::{IncomingChannelsEvent, NewChannelError};
+use super::ichan::{ConnectingChannelHandle, IncomingChannelsEvent, NewChannelError};
 use super::{ConnectingStream, ConnectingStreamError, ConnectingStreamHandle, HolepunchEvent};
 use crate::consts::{MAX_LOOPS, STRICT_CTRL};
 use crate::types::{ConecConn, ControlMsg, CtrlStream, StreamTo};
 use crate::util;
 
 use err_derive::Error;
-use futures::{
-    channel::{mpsc, oneshot},
-    prelude::*,
-};
+use futures::{channel::mpsc, prelude::*};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -59,16 +56,6 @@ pub enum ClientChanError {
     EventsClosed,
 }
 def_into_error!(ClientChanError);
-
-def_cs_future!(
-    ConnectingChannel,
-    pub(crate),
-    ConnectingChannelHandle,
-    pub(self),
-    (),
-    NewChannelError,
-    doc = "A direct channel to a Client that is currently connecting"
-);
 
 pub(super) enum ClientChanEvent {
     Stream(String, u64, ConnectingStreamHandle),
@@ -289,27 +276,24 @@ impl ClientChanRef {
         ctrl: CtrlStream,
         ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
         holepunch_sender: Option<mpsc::UnboundedSender<HolepunchEvent>>,
+        events: mpsc::UnboundedReceiver<ClientChanEvent>,
         listen: bool,
-    ) -> (Self, mpsc::UnboundedSender<ClientChanEvent>) {
-        let (sender, events) = mpsc::unbounded();
-        (
-            Self(Arc::new(Mutex::new(ClientChanInner {
-                conn,
-                ctrl,
-                ref_count: 0,
-                driver: None,
-                to_send: VecDeque::new(),
-                new_streams: HashMap::new(),
-                new_channels: HashMap::new(),
-                flushing: false,
-                keepalive: None,
-                ichan_sender,
-                holepunch_sender,
-                listen,
-                events,
-            }))),
-            sender,
-        )
+    ) -> Self {
+        Self(Arc::new(Mutex::new(ClientChanInner {
+            conn,
+            ctrl,
+            ref_count: 0,
+            driver: None,
+            to_send: VecDeque::new(),
+            new_streams: HashMap::new(),
+            new_channels: HashMap::new(),
+            flushing: false,
+            keepalive: None,
+            ichan_sender,
+            holepunch_sender,
+            listen,
+            events,
+        })))
     }
 }
 
@@ -378,22 +362,6 @@ impl ClientChan {
             .ok();
 
         res
-    }
-
-    pub(super) fn new_channel(&self, to: String, sid: u64) -> ConnectingChannel {
-        let (sender, receiver) = oneshot::channel();
-        self.sender
-            .unbounded_send(ClientChanEvent::Channel(to, sid, sender))
-            .map_err(|e| {
-                if let ClientChanEvent::Channel(_, _, sender) = e.into_inner() {
-                    sender.send(Err(NewChannelError::Event)).ok();
-                } else {
-                    unreachable!()
-                }
-            })
-            .ok();
-
-        ConnectingChannel(receiver)
     }
 
     pub(super) fn get_sender(&self) -> mpsc::UnboundedSender<ClientChanEvent> {
