@@ -1466,7 +1466,12 @@ fn test_keepalive() {
 
 #[test]
 fn check_version() {
-    assert_eq!(crate::consts::VERSION, &format!("CONEC_V{}", env!("CARGO_PKG_VERSION")));
+    let semver_req_version = &crate::consts::VERSION[7..];
+    assert_eq!(crate::consts::VERSION, &format!("CONEC_V{}", semver_req_version));
+
+    let req = semver::VersionReq::parse(&format!("~{}", semver_req_version)).unwrap();
+    let ver = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    assert!(req.matches(&ver));
 }
 
 #[test]

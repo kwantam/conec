@@ -31,4 +31,5 @@ anyhow = "1.0"
 bincode = "1"
 directories-next = "1.0"
 rcgen = { version = "0.8", features = ["x509-parser"] }
+semver = "0.10"
 tokio = { version = "0.2", features = ["rt-core", "time", "rt-threaded", "macros", "io-std", "io-util"] }
