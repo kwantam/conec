@@ -26,11 +26,11 @@
   connects to Coordinator.
 
   Clients can ask Coordinator to help them open a channel to another
-  Client. In this version there is no explicit support for NAT traversal,
-  but because of the low-level networking details clients behind
-  [full-cone NAT](https://en.wikipedia.org/wiki/Network_address_translation#Methods_of_translation)
-  should get traversal for free. In a future version this will be
-  expanded to include address- and port-restricted-cone nats.
+  Client.  By default, Clients will attempt to use holepunching for
+  NAT traversal; this ought to work except when the Client receiving
+  the connection is behind a
+  [symmetric NAT](https://en.wikipedia.org/wiki/Network_address_translation#Methods_of_translation).
+  Please post an issue on the GitHub repo if this doesn't work for you!
 
 - A data stream accepts a sequence of (known length) messages from
   its writer. The data stream's reader receives these messages
@@ -74,7 +74,7 @@
         - no: just connect a Client
         - v0.0.12: remove Coordinator-side stream support
     - [x] Broadcast: identify the sending client?
-    - [ ] add intf to automagically pick between client-to-client and proxied streams
+    - [x] add intf to automagically pick between client-to-client and proxied streams
     - [x] Allow Coord to require trusted CA for client certs
         - in this case, coord will forward trust root for client-to-client
     - [x] NAT traversal
