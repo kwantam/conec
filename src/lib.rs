@@ -17,14 +17,14 @@ the hostname and port number of Coordinator. Coordinator is assumed to have
 a TLS certificate for this hostname issued by a CA that Clients trust.
 For more information, see [Authentication](#authentication), below.
 
-The basic abstraction is a channel, which connects two entities (Client
-or Coordinator). Every Client shares a channel with Coordinator: at
-startup, Client connects to Coordinator. Clients can also ask Coordinator
-to help them open a channel directly to another Client. There is currently
-no explicit support for NAT traversal, but because of the way connections
-are done Clients behind certain NATs (in particular, "full-cone NATs")
-should be able to make direct connections. A future version will add
-support for explicit NAT holepunching.
+The basic abstraction is a channel, which connects two entities (Client or
+Coordinator). Every Client shares a channel with Coordinator: at startup,
+Client connects to Coordinator. Clients can also ask Coordinator to help
+them open a channel directly to another Client. By default, Clients will
+attempt to use [holepunching](https://en.wikipedia.org/wiki/UDP_hole_punching)
+for NAT traversal (this can be disabled in [ClientConfig]). This should
+work in most cases, but will probably not work when the receiving Client
+is behind a [symmetric NAT](https://en.wikipedia.org/wiki/Network_address_translation#Methods_of_translation).
 
 A channel comprises one bi-directional control stream, which is used
 internally to manage the channel, and zero or more bidirectional data streams.
