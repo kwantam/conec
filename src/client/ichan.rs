@@ -114,6 +114,9 @@ pub enum NewChannelError {
     /// Channel already open to this peer
     #[error(display = "Duplicate channel peer")]
     Duplicate,
+    /// Error injecting event
+    #[error(display = "Could not send event")]
+    Event,
 }
 def_into_error!(NewChannelError);
 

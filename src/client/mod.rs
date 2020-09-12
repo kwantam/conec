@@ -169,10 +169,10 @@ impl Client {
 
         // client-coordinator channel
         let coord = {
-            let coord = ClientChanRef::new(conn, ctrl, ichan_sender, holepunch_sender, config.listen);
-            let driver = ClientChanDriver::new(coord.clone(), config.keepalive);
+            let (inner, sender) = ClientChanRef::new(conn, ctrl, ichan_sender, holepunch_sender, config.listen);
+            let driver = ClientChanDriver::new(inner.clone(), config.keepalive);
             tokio::spawn(async move { driver.await });
-            ClientChan(coord)
+            ClientChan::new(inner, sender)
         };
 
         // set up the incoming streams listener

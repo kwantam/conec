@@ -54,6 +54,9 @@ pub enum ClientChanError {
     /// Keepalive timer disappeared unexpectedly
     #[error(display = "Keepalive timer disappered unexpectedly")]
     KeepaliveTimer,
+    /// Events channel closed
+    #[error(display = "Events channel closed")]
+    EventsClosed,
 }
 def_into_error!(ClientChanError);
 
@@ -66,6 +69,12 @@ def_cs_future!(
     NewChannelError,
     doc = "A direct channel to a Client that is currently connecting"
 );
+
+pub(super) enum ClientChanEvent {
+    Stream(String, u64, ConnectingStreamHandle),
+    Broadcast(String, u64, ConnectingStreamHandle),
+    Channel(String, u64, ConnectingChannelHandle),
+}
 
 pub(super) struct ClientChanInner {
     conn: ConecConn,
@@ -80,15 +89,10 @@ pub(super) struct ClientChanInner {
     ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
     holepunch_sender: Option<mpsc::UnboundedSender<HolepunchEvent>>,
     listen: bool,
+    events: mpsc::UnboundedReceiver<ClientChanEvent>,
 }
 
 impl ClientChanInner {
-    fn wake(&mut self) {
-        if let Some(task) = self.driver.take() {
-            task.wake();
-        }
-    }
-
     fn new_stream(&mut self, chan: ConnectingStreamHandle, sid: StreamTo) {
         let bi = self.conn.open_bi();
         tokio::spawn(async move {
@@ -116,7 +120,7 @@ impl ClientChanInner {
         });
     }
 
-    fn handle_events(&mut self, cx: &mut Context) -> Result<(), ClientChanError> {
+    fn handle_events(&mut self, cx: &mut Context) -> Result<bool, ClientChanError> {
         match self.keepalive.as_mut().map_or(Poll::Pending, |k| k.poll_next_unpin(cx)) {
             Poll::Pending => Ok(()),
             Poll::Ready(None) => Err(ClientChanError::KeepaliveTimer),
@@ -124,7 +128,46 @@ impl ClientChanInner {
                 self.to_send.push_back(ControlMsg::KeepAlive);
                 Ok(())
             }
+        }?;
+
+        use ClientChanEvent::*;
+        let mut recvd = 0;
+        loop {
+            let event = match self.events.poll_next_unpin(cx) {
+                Poll::Pending => break,
+                Poll::Ready(None) => Err(ClientChanError::EventsClosed),
+                Poll::Ready(Some(event)) => Ok(event),
+            }?;
+            let is_broadcast = matches!(&event, Broadcast(_, _, _));
+            match event {
+                Stream(peer, sid, handle) | Broadcast(peer, sid, handle) => {
+                    if self.new_streams.get(&sid).is_some() {
+                        handle.send(Err(ConnectingStreamError::StreamId)).ok();
+                    } else {
+                        let cons_msg = if is_broadcast {
+                            ControlMsg::NewBroadcastReq
+                        } else {
+                            ControlMsg::NewStreamReq
+                        };
+                        self.to_send.push_back(cons_msg(peer, sid));
+                        self.new_streams.insert(sid, Some(handle));
+                    }
+                }
+                Channel(peer, sid, handle) => {
+                    if self.new_channels.get(&sid).is_some() {
+                        handle.send(Err(NewChannelError::ChannelId)).ok();
+                    } else {
+                        self.to_send.push_back(ControlMsg::NewChannelReq(peer.clone(), sid));
+                        self.new_channels.insert(sid, Some((peer, handle)));
+                    }
+                }
+            };
+            recvd += 1;
+            if recvd >= MAX_LOOPS {
+                return Ok(true);
+            }
         }
+        Ok(false)
     }
 
     fn get_new_str_or_ch<T>(sid: u64, hash: &mut HashMap<u64, Option<T>>) -> Result<T, ClientChanError> {
@@ -227,7 +270,7 @@ impl ClientChanInner {
     fn run_driver(&mut self, cx: &mut Context) -> Result<(), ClientChanError> {
         loop {
             let mut keep_going = false;
-            self.handle_events(cx)?;
+            keep_going |= self.handle_events(cx)?;
             keep_going |= self.drive_ctrl_recv(cx)?;
             if !self.to_send.is_empty() || self.flushing {
                 keep_going |= self.drive_ctrl_send(cx)?;
@@ -247,21 +290,26 @@ impl ClientChanRef {
         ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
         holepunch_sender: Option<mpsc::UnboundedSender<HolepunchEvent>>,
         listen: bool,
-    ) -> Self {
-        Self(Arc::new(Mutex::new(ClientChanInner {
-            conn,
-            ctrl,
-            ref_count: 0,
-            driver: None,
-            to_send: VecDeque::new(),
-            new_streams: HashMap::new(),
-            new_channels: HashMap::new(),
-            flushing: false,
-            keepalive: None,
-            ichan_sender,
-            holepunch_sender,
-            listen,
-        })))
+    ) -> (Self, mpsc::UnboundedSender<ClientChanEvent>) {
+        let (sender, events) = mpsc::unbounded();
+        (
+            Self(Arc::new(Mutex::new(ClientChanInner {
+                conn,
+                ctrl,
+                ref_count: 0,
+                driver: None,
+                to_send: VecDeque::new(),
+                new_streams: HashMap::new(),
+                new_channels: HashMap::new(),
+                flushing: false,
+                keepalive: None,
+                ichan_sender,
+                holepunch_sender,
+                listen,
+                events,
+            }))),
+            sender,
+        )
     }
 }
 
@@ -289,60 +337,62 @@ impl Drop for ClientChanDriver {
         if let Some(holepunch_sender) = inner.holepunch_sender.take() {
             holepunch_sender.close_channel();
         }
+        inner.events.close();
     }
 }
 
-pub(super) struct ClientChan(pub(super) ClientChanRef);
+pub(super) struct ClientChan {
+    #[allow(dead_code)]
+    inner: ClientChanRef,
+    sender: mpsc::UnboundedSender<ClientChanEvent>,
+}
 
-// XXX should we do this asynchronously via a channel instead?
-//     lock contention on a client channel seems like it should be low
 impl ClientChan {
-    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingStream {
-        // the new stream future is a channel that will contain the resulting stream
-        let (sender, receiver) = oneshot::channel();
-        let mut inner = self.0.lock().unwrap();
+    pub(super) fn new(inner: ClientChanRef, sender: mpsc::UnboundedSender<ClientChanEvent>) -> Self {
+        Self { inner, sender }
+    }
 
-        // make sure this stream hasn't already been used
-        if inner.new_streams.get(&sid).is_some() {
-            sender.send(Err(ConnectingStreamError::StreamId)).ok();
-        } else {
-            inner.to_send.push_back(ControlMsg::NewStreamReq(to, sid));
-            inner.new_streams.insert(sid, Some(sender));
-            inner.wake();
-        }
+    pub(super) fn new_stream(&self, to: String, sid: u64) -> ConnectingStream {
+        self.new_x(to, sid, ClientChanEvent::Stream)
+    }
+
+    pub(super) fn new_broadcast(&self, to: String, sid: u64) -> ConnectingStream {
+        self.new_x(to, sid, ClientChanEvent::Broadcast)
+    }
+
+    fn new_x<F>(&self, to: String, sid: u64, cons_msg: F) -> ConnectingStream
+    where
+        F: Fn(String, u64, ConnectingStreamHandle) -> ClientChanEvent,
+    {
+        use ClientChanEvent::*;
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .unbounded_send(cons_msg(to, sid, sender))
+            .map_err(|e| {
+                let sender = match e.into_inner() {
+                    Stream(_, _, sender) | Broadcast(_, _, sender) => sender,
+                    _ => unreachable!(),
+                };
+                sender.send(Err(ConnectingStreamError::Event)).ok();
+            })
+            .ok();
 
         ConnectingStream(receiver)
     }
 
     pub(super) fn new_channel(&self, to: String, sid: u64) -> ConnectingChannel {
-        // future that will return the result from the coordinator
         let (sender, receiver) = oneshot::channel();
-        let mut inner = self.0.lock().unwrap();
-
-        if inner.new_channels.get(&sid).is_some() {
-            sender.send(Err(NewChannelError::ChannelId)).ok();
-        } else {
-            inner.to_send.push_back(ControlMsg::NewChannelReq(to.clone(), sid));
-            inner.new_channels.insert(sid, Some((to, sender)));
-            inner.wake();
-        }
+        self.sender
+            .unbounded_send(ClientChanEvent::Channel(to, sid, sender))
+            .map_err(|e| {
+                if let ClientChanEvent::Channel(_, _, sender) = e.into_inner() {
+                    sender.send(Err(NewChannelError::Event)).ok();
+                } else {
+                    unreachable!()
+                }
+            })
+            .ok();
 
         ConnectingChannel(receiver)
-    }
-
-    pub(super) fn new_broadcast(&self, chan: String, sid: u64) -> ConnectingStream {
-        let (sender, receiver) = oneshot::channel();
-        let mut inner = self.0.lock().unwrap();
-
-        // make sure this stream hasn't already been used
-        if inner.new_streams.get(&sid).is_some() {
-            sender.send(Err(ConnectingStreamError::StreamId)).ok();
-        } else {
-            inner.to_send.push_back(ControlMsg::NewBroadcastReq(chan, sid));
-            inner.new_streams.insert(sid, Some(sender));
-            inner.wake();
-        }
-
-        ConnectingStream(receiver)
     }
 }
