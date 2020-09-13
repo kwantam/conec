@@ -77,7 +77,10 @@ async fn run_client(cfg: ClientConfig, peer: String, initiate: bool) {
     let sfut = stdin
         .lines()
         .forward(SymmetricallyFramed::new(send, SymmetricalBincode::<String>::default()))
-        .then(|sf| async { sf.ok(); eprintln!("*** STDIN closed."); });
+        .then(|sf| async {
+            sf.ok();
+            eprintln!("*** STDIN closed.");
+        });
 
     futures::future::join(sfut, rfut).await;
 }
