@@ -20,7 +20,7 @@ mod tls;
 
 use crate::consts::{ALPN_CONEC, MAX_LOOPS};
 use crate::types::{tagstream::TaggedInStream, ConecConn, ConecConnError, ControlMsg, CtrlStream, OutStream};
-use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanRef};
+use bchan::{BroadcastChan, BroadcastChanDriver, BroadcastChanEvent, BroadcastChanRef};
 pub use chan::CoordChanError;
 use chan::{CoordChan, CoordChanDriver, CoordChanEvent, CoordChanRef};
 use config::CoordConfig;
@@ -78,14 +78,16 @@ enum CoordEvent {
     NewChannelRes(String, u64, SocketAddr, Vec<u8>),
     NewChannelErr(String, u64),
     NewBroadcastReq(String, OutStream, TaggedInStream),
+    BroadcastCountReq(String, String, u64),
+    BroadcastCountRes(String, u64, (usize, usize)),
 }
 
 struct CoordInner {
     incoming: Incoming,
     clients: HashMap<String, CoordChan>,
     broadcasts: HashMap<String, BroadcastChan>,
-    driver: Option<Waker>,
     ref_count: usize,
+    driver: Option<Waker>,
     sender: mpsc::UnboundedSender<CoordEvent>,
     events: mpsc::UnboundedReceiver<CoordEvent>,
 }
@@ -200,7 +202,7 @@ impl CoordInner {
                 }
                 NewBroadcastReq(chan, send, recv) => {
                     if let Some(c_chan) = self.broadcasts.get(&chan) {
-                        c_chan.new_broadcast(send, recv);
+                        c_chan.send(BroadcastChanEvent::New(send, recv));
                     } else {
                         let (inner, sender) = BroadcastChanRef::new(chan.clone(), self.sender.clone(), send, recv);
                         let driver = BroadcastChanDriver(inner.clone());
@@ -208,6 +210,22 @@ impl CoordInner {
                         let bchan = BroadcastChan { inner, sender };
                         self.broadcasts.insert(chan, bchan);
                     };
+                }
+                BroadcastCountReq(chan, from, sid) => {
+                    if let Some(c_chan) = self.broadcasts.get(&chan) {
+                        c_chan.send(BroadcastChanEvent::Count(from, sid));
+                    } else if let Some(c_from) = self.clients.get(&from) {
+                        c_from.send(CoordChanEvent::BCErr(sid));
+                    } else {
+                        tracing::warn!("BCReq client disappeared: {}:{} -> {}", from, sid, chan);
+                    }
+                }
+                BroadcastCountRes(to, sid, counts) => {
+                    if let Some(c_to) = self.clients.get(&to) {
+                        c_to.send(CoordChanEvent::BCRes(sid, counts));
+                    } else {
+                        tracing::warn!("BCRes client disappeared: {}:{}", to, sid);
+                    }
                 }
             };
             accepted += 1;
@@ -246,8 +264,8 @@ impl CoordRef {
             incoming,
             clients: HashMap::new(),
             broadcasts: HashMap::new(),
-            driver: None,
             ref_count: 0,
+            driver: None,
             sender,
             events,
         })))

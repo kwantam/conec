@@ -40,6 +40,9 @@ pub enum ControlMsg {
     NewBroadcastReq(String, u64),
     NewBroadcastErr(u64),
     NewBroadcastOk(u64),
+    BroadcastCountReq(String, u64),
+    BroadcastCountErr(u64),
+    BroadcastCountRes(u64, (usize, usize)),
 }
 
 #[derive(Debug, Error)]

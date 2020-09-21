@@ -83,6 +83,7 @@ impl ClientClientChanInner {
             Poll::Ready(None) => Err(ClientClientChanError::KeepaliveTimer),
             Poll::Ready(Some(_)) => {
                 self.to_send.push_back(ControlMsg::KeepAlive);
+                while self.keepalive.as_mut().unwrap().poll_next_unpin(cx).is_ready() {}
                 Ok(())
             }
         }

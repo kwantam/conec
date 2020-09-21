@@ -25,7 +25,7 @@ mod tls;
 use crate::consts::ALPN_CONEC;
 use crate::types::{ConecConn, ConecConnError};
 use crate::Coord;
-pub use chan::ClientChanError;
+pub use chan::{BroadcastCounting, BroadcastCountingError, ClientChanError};
 use chan::{ClientChan, ClientChanDriver, ClientChanRef};
 use config::{CertGenError, ClientConfig};
 use connstream::ConnectingStreamHandle;
@@ -279,5 +279,16 @@ impl Client {
         let sid = self.ctr;
         self.ctr += 1;
         ConnectingStream::new(Some((conn_chan, csnd, isnd, to, sid))).0
+    }
+
+    /// Count the current members of a broadcast channel
+    ///
+    /// Request from Coordinator the current count of senders and receivers on
+    /// a given broadcast channel. The result is a future that, when forced,
+    /// returns either an error or the tuple `(#senders, #receivers)`.
+    pub fn get_broadcast_count(&mut self, chan: String) -> BroadcastCounting {
+        let ctr = self.ctr;
+        self.ctr += 1;
+        self.coord.get_broadcast_count(chan, ctr)
     }
 }

@@ -88,6 +88,8 @@ pub(super) enum CoordChanEvent {
     NCReq(String, u64, Vec<u8>, SocketAddr),
     NCRes(u64, SocketAddr, Vec<u8>),
     BiIn(StreamTo, OutStream, InStream),
+    BCErr(u64),
+    BCRes(u64, (usize, usize)),
 }
 
 impl CoordChanInner {
@@ -132,6 +134,10 @@ impl CoordChanInner {
                     self.new_broadcasts.insert(sid, chan);
                     Ok(())
                 }
+                ControlMsg::BroadcastCountReq(chan, sid) => self
+                    .coord
+                    .unbounded_send(CoordEvent::BroadcastCountReq(chan, self.peer.clone(), sid))
+                    .map_err(|e| CoordChanError::SendCoordEvent(e.into_send_error())),
                 ControlMsg::KeepAlive => {
                     self.to_send.push_back(ControlMsg::KeepAlive);
                     Ok(())
@@ -231,6 +237,8 @@ impl CoordChanInner {
                         }
                     }
                 },
+                BCErr(sid) => self.to_send.push_back(ControlMsg::BroadcastCountErr(sid)),
+                BCRes(sid, counts) => self.to_send.push_back(ControlMsg::BroadcastCountRes(sid, counts)),
             };
             accepted += 1;
             if accepted >= MAX_LOOPS {

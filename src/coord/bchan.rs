@@ -35,7 +35,10 @@ pub(super) enum BroadcastChanError {
 }
 def_into_error!(BroadcastChanError);
 
-pub(super) type BroadcastChanEvent = (OutStream, TaggedInStream);
+pub(super) enum BroadcastChanEvent {
+    New(OutStream, TaggedInStream),
+    Count(String, u64),
+}
 
 pub(super) struct BroadcastChanInner {
     chan: String,
@@ -43,22 +46,32 @@ pub(super) struct BroadcastChanInner {
     sender: mpsc::UnboundedSender<BroadcastChanEvent>,
     events: mpsc::UnboundedReceiver<BroadcastChanEvent>,
     fanout: BcastFanout,
-    driver: Option<Waker>,
     ref_count: usize,
+    driver: Option<Waker>,
 }
 
 impl BroadcastChanInner {
     fn handle_events(&mut self, cx: &mut Context) -> Result<bool, BroadcastChanError> {
-        let mut accepted = 0;
+        use BroadcastChanEvent::*;
+        let mut recvd = 0;
         loop {
-            let (send, recv) = match self.events.poll_next_unpin(cx) {
+            let event = match self.events.poll_next_unpin(cx) {
                 Poll::Pending => break,
                 Poll::Ready(None) => Err(BroadcastChanError::EventsClosed),
                 Poll::Ready(Some(event)) => Ok(event),
             }?;
-            self.fanout.push(send, recv);
-            accepted += 1;
-            if accepted >= MAX_LOOPS {
+            match event {
+                New(send, recv) => {
+                    self.fanout.push(send, recv);
+                    Ok(())
+                }
+                Count(from, sid) => self
+                    .coord
+                    .unbounded_send(CoordEvent::BroadcastCountRes(from, sid, self.fanout.len()))
+                    .map_err(|e| BroadcastChanError::Coord(e.into_send_error())),
+            }?;
+            recvd += 1;
+            if recvd >= MAX_LOOPS {
                 return Ok(true);
             }
         }
@@ -109,8 +122,8 @@ impl BroadcastChanRef {
                 sender: sender.clone(),
                 events,
                 fanout,
-                driver: None,
                 ref_count: 0,
+                driver: None,
             }))),
             sender,
         )
@@ -141,8 +154,8 @@ pub(super) struct BroadcastChan {
 }
 
 impl BroadcastChan {
-    pub(super) fn new_broadcast(&self, send: OutStream, recv: TaggedInStream) {
-        self.sender.unbounded_send((send, recv)).ok();
+    pub(super) fn send(&self, msg: BroadcastChanEvent) {
+        self.sender.unbounded_send(msg).ok();
     }
 }
 
@@ -267,7 +280,6 @@ impl BcastFanin {
         Self(FuturesUnordered::new())
     }
 
-    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -336,6 +348,13 @@ impl BcastFanout {
     fn push(&mut self, send: OutStream, recv: TaggedInStream) {
         self.waiting.push(BcastSendReady::new(send));
         self.recv.push(recv);
+    }
+
+    fn len(&self) -> (usize, usize) {
+        (
+            self.recv.len(),
+            self.ready.len() + self.waiting.len() + self.flush_close.len(),
+        )
     }
 
     fn get_rwf(

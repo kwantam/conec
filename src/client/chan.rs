@@ -14,7 +14,10 @@ use crate::types::{ConecConn, ControlMsg, CtrlStream, StreamTo};
 use crate::util;
 
 use err_derive::Error;
-use futures::{channel::mpsc, prelude::*};
+use futures::{
+    channel::{mpsc, oneshot},
+    prelude::*,
+};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
@@ -57,10 +60,35 @@ pub enum ClientChanError {
 }
 def_into_error!(ClientChanError);
 
+def_cs_future!(
+    BroadcastCounting,
+    BroadcastCountingHandle,
+    (usize, usize),
+    BroadcastCountingError,
+    doc = "A future that resolves to a count of clients on a broadcast"
+);
+/// Error variant output by [BroadcastCounting]
+#[derive(Debug, Error)]
+pub enum BroadcastCountingError {
+    /// Tried to count a broadcast stream that doesn't exist
+    #[error(display = "Nonexistent broadcast stream")]
+    Nonexistent,
+    /// Broadcast count was canceled
+    #[error(display = "Canceled: {:?}", _0)]
+    Canceled(#[source] oneshot::Canceled),
+    /// Error injecting event
+    #[error(display = "Could not send event")]
+    Event,
+    /// Reused request id
+    #[error(display = "Reused request id")]
+    RequestId,
+}
+
 pub(super) enum ClientChanEvent {
     Stream(String, u64, ConnectingStreamHandle),
     Broadcast(String, u64, ConnectingStreamHandle),
     Channel(String, u64, ConnectingChannelHandle),
+    BroadcastCount(String, u64, BroadcastCountingHandle),
 }
 
 pub(super) struct ClientChanInner {
@@ -71,6 +99,7 @@ pub(super) struct ClientChanInner {
     to_send: VecDeque<ControlMsg>,
     new_streams: HashMap<u64, Option<ConnectingStreamHandle>>,
     new_channels: HashMap<u64, Option<(String, ConnectingChannelHandle)>>,
+    bcast_counts: HashMap<u64, Option<BroadcastCountingHandle>>,
     flushing: bool,
     keepalive: Option<Interval>,
     ichan_sender: mpsc::UnboundedSender<IncomingChannelsEvent>,
@@ -113,6 +142,7 @@ impl ClientChanInner {
             Poll::Ready(None) => Err(ClientChanError::KeepaliveTimer),
             Poll::Ready(Some(_)) => {
                 self.to_send.push_back(ControlMsg::KeepAlive);
+                while self.keepalive.as_mut().unwrap().poll_next_unpin(cx).is_ready() {}
                 Ok(())
             }
         }?;
@@ -148,6 +178,14 @@ impl ClientChanInner {
                         self.new_channels.insert(sid, Some((peer, handle)));
                     }
                 }
+                BroadcastCount(chan, sid, handle) => {
+                    if self.bcast_counts.get(&sid).is_some() {
+                        handle.send(Err(BroadcastCountingError::RequestId)).ok();
+                    } else {
+                        self.to_send.push_back(ControlMsg::BroadcastCountReq(chan, sid));
+                        self.bcast_counts.insert(sid, Some(handle));
+                    }
+                }
             };
             recvd += 1;
             if recvd >= MAX_LOOPS {
@@ -158,14 +196,13 @@ impl ClientChanInner {
     }
 
     fn get_new_str_or_ch<T>(sid: u64, hash: &mut HashMap<u64, Option<T>>) -> Result<T, ClientChanError> {
-        if let Some(chan) = hash.get_mut(&sid) {
-            if let Some(chan) = chan.take() {
-                Ok(chan)
-            } else {
-                Err(ClientChanError::StaleStrOrCh(sid))
-            }
-        } else {
-            Err(ClientChanError::NonexistentStrOrCh(sid))
+        let chan = match hash.get_mut(&sid) {
+            Some(chan) => Ok(chan),
+            None => Err(ClientChanError::NonexistentStrOrCh(sid)),
+        }?;
+        match chan.take() {
+            Some(chan) => Ok(chan),
+            None => Err(ClientChanError::StaleStrOrCh(sid)),
         }
     }
 
@@ -229,6 +266,16 @@ impl ClientChanInner {
                         self.to_send.push_back(CertNok(peer, sid));
                         Ok(())
                     }
+                }
+                BroadcastCountErr(sid) => {
+                    let handle = Self::get_new_str_or_ch(sid, &mut self.bcast_counts)?;
+                    handle.send(Err(BroadcastCountingError::Nonexistent)).ok();
+                    Ok(())
+                }
+                BroadcastCountRes(sid, counts) => {
+                    let handle = Self::get_new_str_or_ch(sid, &mut self.bcast_counts)?;
+                    handle.send(Ok(counts)).ok();
+                    Ok(())
                 }
                 KeepAlive => Ok(()),
                 _ => {
@@ -295,6 +342,7 @@ impl ClientChanRef {
             to_send: VecDeque::new(),
             new_streams: HashMap::new(),
             new_channels: HashMap::new(),
+            bcast_counts: HashMap::new(),
             flushing: false,
             keepalive: None,
             ichan_sender,
@@ -370,6 +418,23 @@ impl ClientChan {
             .ok();
 
         res
+    }
+
+    pub(super) fn get_broadcast_count(&self, chan: String, sid: u64) -> BroadcastCounting {
+        use ClientChanEvent::*;
+        let (send, recv) = oneshot::channel();
+        self.sender
+            .unbounded_send(BroadcastCount(chan, sid, send))
+            .map_err(|e| {
+                let send = match e.into_inner() {
+                    BroadcastCount(_, _, send) => send,
+                    _ => unreachable!(),
+                };
+                send.send(Err(BroadcastCountingError::Event)).ok();
+            })
+            .ok();
+
+        BroadcastCounting(recv)
     }
 
     pub(super) fn get_sender(&self) -> mpsc::UnboundedSender<ClientChanEvent> {

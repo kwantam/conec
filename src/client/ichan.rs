@@ -36,9 +36,6 @@ def_cs_future!(
 /// Error variant output by [ClosingChannel]
 #[derive(Debug, Error)]
 pub enum ClosingChannelError {
-    /// Incoming channels receiver disappeared
-    #[error(display = "IncomingChannels receiver is gone")]
-    ReceiverClosed,
     /// Tried to close a channel that doesn't exist
     #[error(display = "Nonexistent channel")]
     Nonexistent,

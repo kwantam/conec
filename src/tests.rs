@@ -479,10 +479,18 @@ fn broadcast_loopback() {
         };
 
         assert_eq!(coord.num_clients(), 1);
+        client
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         // open broadcast stream
         let (mut s11, r11) = client.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r11 = TaggedBroadcastInStream::new(r11);
+        assert_eq!(
+            client.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 1)
+        );
 
         let to_send = Bytes::from("loopback broadcast");
         s11.send(to_send.clone()).await.unwrap();
@@ -525,12 +533,28 @@ fn broadcast_bidi() {
         };
 
         assert_eq!(coord.num_clients(), 2);
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         // open broadcast streams
         let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaggedBroadcastInStream::new(r1);
         let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
@@ -552,14 +576,39 @@ fn broadcast_bidi() {
         drop(s2);
         let mut r1 = TaglessBroadcastInStream::new(r1.into_inner());
         assert_eq!(coord.num_broadcasts(), 1);
+        // receivers don't get reaped until a message gets sent
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 2)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 2)
+        );
         s1.send(to_send.clone()).await.unwrap();
         let rec1 = r1.try_next().await?.unwrap().freeze();
         assert_eq!(to_send, rec1);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 1)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 1)
+        );
 
         drop(r1);
         drop(s1);
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_broadcasts(), 0);
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -604,17 +653,42 @@ fn broadcast_codec() {
             ValueTwo,
         }
 
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+
         // open broadcast streams and wrap in codec
         let (s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut s1 = SymmetricallyFramed::new(s1, SymmetricalBincode::<TestValues>::default());
         let r1 = NonblockingInStream::new(r1, 16);
         let r1 = TaglessBroadcastInStream::new(r1);
         let mut r1 = SymmetricallyFramed::new(r1, SymmetricalBincode::<TestValues>::default());
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 1)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (1, 1)
+        );
 
         let (s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut s2 = SymmetricallyFramed::new(s2, SymmetricalBincode::<TestValues>::default());
         let r2 = TaggedBroadcastInStream::new(r2);
         let mut r2 = TaggedDeserializer::new(r2, SymmetricalBincode::<TestValues>::default());
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
 
         s1.send(TestValues::ValueOne).await.unwrap();
         let rec1 = r1.try_next().await?.unwrap();
@@ -666,12 +740,28 @@ fn broadcast_sender_close() {
         };
 
         assert_eq!(coord.num_clients(), 2);
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         // open broadcast streams
         let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaglessBroadcastInStream::new(r1);
         let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
@@ -693,6 +783,14 @@ fn broadcast_sender_close() {
         assert_eq!(coord.num_broadcasts(), 0);
         assert!(r1.try_next().await?.is_none());
         assert!(r2.try_next().await?.is_none());
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -730,12 +828,28 @@ fn broadcast_receiver_close() {
         };
 
         assert_eq!(coord.num_clients(), 2);
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         // open broadcast streams
         let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaglessBroadcastInStream::new(r1);
         let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
 
         let to_send = Bytes::from("loopback broadcast");
         s1.send(to_send.clone()).await.unwrap();
@@ -753,17 +867,19 @@ fn broadcast_receiver_close() {
 
         drop(r1);
         drop(r2);
-        assert_eq!(coord.num_broadcasts(), 1);
-
         s1.send(to_send.clone()).await.unwrap();
-        s2.send(to_send.clone()).await.unwrap();
         time::delay_for(Duration::from_millis(40)).await;
-        assert_eq!(coord.num_broadcasts(), 1);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 0)
+        );
 
-        drop(s1);
-        drop(s2);
         time::delay_for(Duration::from_millis(40)).await;
         assert_eq!(coord.num_broadcasts(), 0);
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         Ok(()) as Result<(), std::io::Error>
     })
@@ -817,6 +933,22 @@ fn broadcast_block_nonblock() {
         };
 
         assert_eq!(coord.num_clients(), 4);
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client2
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client3
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        client4
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
 
         // everyone connects to broadcast
         let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
