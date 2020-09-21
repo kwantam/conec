@@ -876,7 +876,12 @@ fn broadcast_receiver_close() {
 
         drop(r1);
         drop(r2);
-        time::delay_for(Duration::from_secs(BCAST_SWEEP_SECS * 2 + 1)).await;
+        time::delay_for(Duration::from_secs(BCAST_SWEEP_SECS + 1)).await;
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 0)
+        );
+
         assert_eq!(coord.num_broadcasts(), 0);
         client1
             .get_broadcast_count("broadcast_chan".to_string())
