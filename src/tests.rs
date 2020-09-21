@@ -26,7 +26,7 @@ use tokio::{runtime, time};
 use tokio_serde::{formats::SymmetricalBincode, SymmetricallyFramed};
 
 #[test]
-fn test_simple() {
+fn simple() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -55,7 +55,7 @@ fn test_simple() {
 }
 
 #[test]
-fn test_repeat_name() {
+fn repeat_name() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -96,7 +96,7 @@ fn test_repeat_name() {
 }
 
 #[test]
-fn test_stream_uni() {
+fn stream_uni() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -150,7 +150,7 @@ fn test_stream_uni() {
 }
 
 #[test]
-fn test_stream_bi() {
+fn stream_bi() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -199,7 +199,7 @@ fn test_stream_bi() {
 }
 
 #[test]
-fn test_new_stream() {
+fn new_stream() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -272,7 +272,7 @@ fn test_new_stream() {
 }
 
 #[test]
-fn test_stream_block_nonblock() {
+fn stream_block_nonblock() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -363,7 +363,7 @@ fn test_stream_block_nonblock() {
 }
 
 #[test]
-fn test_stream_bi_multi() {
+fn stream_bi_multi() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -416,7 +416,7 @@ fn test_stream_bi_multi() {
 }
 
 #[test]
-fn test_stream_loopback() {
+fn stream_loopback() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -457,7 +457,7 @@ fn test_stream_loopback() {
 }
 
 #[test]
-fn test_broadcast_loopback() {
+fn broadcast_loopback() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -481,7 +481,7 @@ fn test_broadcast_loopback() {
         assert_eq!(coord.num_clients(), 1);
 
         // open broadcast stream
-        let (mut s11, r11) = client.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s11, r11) = client.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r11 = TaggedBroadcastInStream::new(r11);
 
         let to_send = Bytes::from("loopback broadcast");
@@ -495,7 +495,7 @@ fn test_broadcast_loopback() {
 }
 
 #[test]
-fn test_broadcast_bidi() {
+fn broadcast_bidi() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -527,9 +527,9 @@ fn test_broadcast_bidi() {
         assert_eq!(coord.num_clients(), 2);
 
         // open broadcast streams
-        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaggedBroadcastInStream::new(r1);
-        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
@@ -567,7 +567,7 @@ fn test_broadcast_bidi() {
 }
 
 #[test]
-fn test_broadcast_codec() {
+fn broadcast_codec() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -605,13 +605,13 @@ fn test_broadcast_codec() {
         }
 
         // open broadcast streams and wrap in codec
-        let (s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut s1 = SymmetricallyFramed::new(s1, SymmetricalBincode::<TestValues>::default());
         let r1 = NonblockingInStream::new(r1, 16);
         let r1 = TaglessBroadcastInStream::new(r1);
         let mut r1 = SymmetricallyFramed::new(r1, SymmetricalBincode::<TestValues>::default());
 
-        let (s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut s2 = SymmetricallyFramed::new(s2, SymmetricalBincode::<TestValues>::default());
         let r2 = TaggedBroadcastInStream::new(r2);
         let mut r2 = TaggedDeserializer::new(r2, SymmetricalBincode::<TestValues>::default());
@@ -636,7 +636,7 @@ fn test_broadcast_codec() {
 }
 
 #[test]
-fn test_broadcast_sender_close() {
+fn broadcast_sender_close() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -668,9 +668,9 @@ fn test_broadcast_sender_close() {
         assert_eq!(coord.num_clients(), 2);
 
         // open broadcast streams
-        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaglessBroadcastInStream::new(r1);
-        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
@@ -700,7 +700,7 @@ fn test_broadcast_sender_close() {
 }
 
 #[test]
-fn test_broadcast_receiver_close() {
+fn broadcast_receiver_close() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -732,9 +732,9 @@ fn test_broadcast_receiver_close() {
         assert_eq!(coord.num_clients(), 2);
 
         // open broadcast streams
-        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaglessBroadcastInStream::new(r1);
-        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
 
         let to_send = Bytes::from("loopback broadcast");
@@ -771,7 +771,7 @@ fn test_broadcast_receiver_close() {
 }
 
 #[test]
-fn test_broadcast_block_nonblock() {
+fn broadcast_block_nonblock() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -819,13 +819,13 @@ fn test_broadcast_block_nonblock() {
         assert_eq!(coord.num_clients(), 4);
 
         // everyone connects to broadcast
-        let (mut s1, r1) = client1.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s1, r1) = client1.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r1 = TaglessBroadcastInStream::new(r1);
-        let (mut s2, r2) = client2.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s2, r2) = client2.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r2 = TaglessBroadcastInStream::new(r2);
-        let (mut s3, r3) = client3.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s3, r3) = client3.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r3 = TaglessBroadcastInStream::new(r3);
-        let (mut s4, r4) = client4.new_broadcast("test_broadcast_chan".to_string()).await.unwrap();
+        let (mut s4, r4) = client4.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r4 = TaglessBroadcastInStream::new(r4);
         assert_eq!(coord.num_broadcasts(), 1);
 
@@ -973,7 +973,7 @@ fn test_broadcast_block_nonblock() {
 }
 
 #[test]
-fn test_channel_errors() {
+fn channel_errors() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -1016,7 +1016,7 @@ fn test_channel_errors() {
 }
 
 #[test]
-fn test_channel_simple() {
+fn channel_simple() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -1077,7 +1077,7 @@ fn test_channel_simple() {
 }
 
 #[test]
-fn test_channel_close() {
+fn channel_close() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -1152,7 +1152,7 @@ fn test_channel_close() {
 }
 
 #[test]
-fn test_channel_oneway() {
+fn channel_oneway() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -1215,7 +1215,7 @@ fn test_channel_oneway() {
 }
 
 #[test]
-fn test_client_cert() {
+fn client_cert() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
 
@@ -1281,7 +1281,7 @@ fn test_client_cert() {
 }
 
 #[test]
-fn test_client_cert_channel() {
+fn client_cert_channel() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
 
@@ -1400,7 +1400,7 @@ fn test_client_cert_channel() {
 }
 
 #[test]
-fn test_reject_client_cert() {
+fn reject_client_cert() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
 
@@ -1435,7 +1435,7 @@ fn test_reject_client_cert() {
 }
 
 #[test]
-fn test_keepalive() {
+fn keepalive() {
     let (cpath, kpath) = get_cert_paths();
     let mut rt = runtime::Builder::new().basic_scheduler().enable_all().build().unwrap();
     rt.block_on(async move {
@@ -1475,7 +1475,7 @@ fn check_version() {
 }
 
 #[test]
-fn test_bincode() {
+fn bincode() {
     use bytes::{Buf, BufMut, BytesMut};
     use std::io::Cursor;
     use std::str::from_utf8;
