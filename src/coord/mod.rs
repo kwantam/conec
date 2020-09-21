@@ -205,7 +205,7 @@ impl CoordInner {
                         c_chan.send(BroadcastChanEvent::New(send, recv));
                     } else {
                         let (inner, sender) = BroadcastChanRef::new(chan.clone(), self.sender.clone(), send, recv);
-                        let driver = BroadcastChanDriver(inner.clone());
+                        let driver = BroadcastChanDriver::new(inner.clone());
                         tokio::spawn(async move { driver.await });
                         let bchan = BroadcastChan { inner, sender };
                         self.broadcasts.insert(chan, bchan);

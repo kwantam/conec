@@ -344,6 +344,7 @@ mod consts {
     pub(crate) const STRICT_CTRL: bool = true;
     pub(crate) const HOLEPUNCH_MILLIS: u64 = 100;
     pub(crate) const HOLEPUNCH_NPKTS: usize = 30;
+    pub(crate) const BCAST_SWEEP_SECS: u64 = 10;
 }
 
 /// Re-exports from quinn

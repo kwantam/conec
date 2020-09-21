@@ -8,7 +8,7 @@
 // except according to those terms.
 
 use super::CoordEvent;
-use crate::consts::MAX_LOOPS;
+use crate::consts::{BCAST_SWEEP_SECS, MAX_LOOPS};
 use crate::types::{tagstream::TaggedInStream, OutStream};
 
 use bytes::Bytes;
@@ -21,6 +21,7 @@ use futures::{
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+use tokio::time::{interval, Duration, Interval};
 
 #[derive(Debug, Error)]
 pub(super) enum BroadcastChanError {
@@ -32,6 +33,8 @@ pub(super) enum BroadcastChanError {
     ClientRecv(#[source] std::io::Error),
     #[error(display = "Event channel closed")]
     EventsClosed,
+    #[error(display = "Sweep timer disappeared unexpectedly")]
+    SweepTimer,
 }
 def_into_error!(BroadcastChanError);
 
@@ -48,10 +51,26 @@ pub(super) struct BroadcastChanInner {
     fanout: BcastFanout,
     ref_count: usize,
     driver: Option<Waker>,
+    sweep: Option<Interval>,
 }
 
 impl BroadcastChanInner {
     fn handle_events(&mut self, cx: &mut Context) -> Result<bool, BroadcastChanError> {
+        match self
+            .sweep
+            .as_mut()
+            .ok_or(BroadcastChanError::SweepTimer)?
+            .poll_next_unpin(cx)
+        {
+            Poll::Pending => Ok(()),
+            Poll::Ready(None) => Err(BroadcastChanError::SweepTimer),
+            Poll::Ready(Some(_)) => {
+                self.fanout.sweep = true;
+                while self.sweep.as_mut().unwrap().poll_next_unpin(cx).is_ready() {}
+                Ok(())
+            }
+        }?;
+
         use BroadcastChanEvent::*;
         let mut recvd = 0;
         loop {
@@ -124,13 +143,26 @@ impl BroadcastChanRef {
                 fanout,
                 ref_count: 0,
                 driver: None,
+                sweep: None,
             }))),
             sender,
         )
     }
 }
 
-def_driver!(BroadcastChanRef, BroadcastChanDriver, BroadcastChanError);
+def_driver!(pub(self), BroadcastChanRef; pub(super), BroadcastChanDriver; BroadcastChanError);
+impl BroadcastChanDriver {
+    pub(super) fn new(inner: BroadcastChanRef) -> Self {
+        {
+            let mut inner_locked = inner.lock().unwrap();
+            inner_locked
+                .sweep
+                .replace(interval(Duration::from_secs(BCAST_SWEEP_SECS)));
+        }
+        Self(inner)
+    }
+}
+
 impl Drop for BroadcastChanDriver {
     fn drop(&mut self) {
         let mut inner = self.0.lock().unwrap();
@@ -321,6 +353,7 @@ struct BcastFanout {
     flush_close: FuturesUnordered<BcastSendFlushClose>,
     buf: Option<Bytes>,
     closing: bool,
+    sweep: bool,
 }
 
 impl BcastFanout {
@@ -342,6 +375,7 @@ impl BcastFanout {
             flush_close: FuturesUnordered::new(),
             buf: None,
             closing: false,
+            sweep: false,
         }
     }
 
@@ -372,6 +406,18 @@ impl Future for BcastFanout {
     type Output = Result<(), BroadcastChanError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        // XXX(broadcast hack)
+        // Sending an empty frame is a hack to detect closed receivers.
+        // We can get rid of this one we update to a newer version of quinn,
+        // which will expose poll_stopped().
+        //
+        // Once we fix this hack, also need to remove the corresponding hack from
+        // NonblockingInStream, TaggedBroadcastInStream, and TaglessBroadcastInStream.
+        if self.sweep {
+            self.sweep = false;
+            self.buf.get_or_insert(Bytes::new());
+        }
+
         // done when there's no one left listening
         if self.ready.is_empty() && self.waiting.is_empty() && self.flush_close.is_empty() {
             // all done
@@ -433,14 +479,18 @@ impl Future for BcastFanout {
                 let mut readied = 0;
                 loop {
                     let (sink, flushing) = match self.waiting.poll_next_unpin(cx) {
+                        Poll::Ready(None) => break,      // all sinks are writable now
+                        Poll::Ready(Some(Ok(sf))) => sf, // ok means this sink is ready
                         Poll::Pending => {
                             // waiting for sinks to be writable
                             returning = true;
                             continue 'outer;
                         }
-                        Poll::Ready(None) => break, // all sinks are writable now
-                        Poll::Ready(Some(Err(_))) => continue, // err means this sink is gone
-                        Poll::Ready(Some(Ok(sf))) => sf, // ok means this sink is ready
+                        Poll::Ready(Some(Err(_))) => {
+                            // err means this sink is gone
+                            readied += 1;
+                            continue;
+                        }
                     };
                     if self.closing {
                         self.flush_close.push(BcastSendFlushClose::new(sink, true));

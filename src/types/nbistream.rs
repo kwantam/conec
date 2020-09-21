@@ -72,6 +72,7 @@ pub(super) struct NblkInStreamInner {
     lagged: usize,
     closed: bool,
     reader: Option<Waker>,
+    is_bcast: bool,
 }
 
 impl NblkInStreamInner {
@@ -92,7 +93,8 @@ impl NblkInStreamInner {
                 Poll::Ready(Some(Err(e))) => Err(NonblockingInStreamError::StreamPoll(e)),
                 Poll::Ready(Some(Ok(msg))) => Ok(msg),
             }?;
-            if self.queue.push_back(msg).is_some() {
+            // XXX(broadcast hack): drop empty messages
+            if !(self.is_bcast && msg.is_empty()) && self.queue.push_back(msg).is_some() {
                 self.lagged += 1;
             }
             recvd += 1;
@@ -127,7 +129,7 @@ impl NblkInStreamInner {
 
 def_ref!(NblkInStreamInner, NblkInStreamRef, pub(self));
 impl NblkInStreamRef {
-    fn new(recv: InStream, buflen: usize) -> Self {
+    fn new(recv: InStream, buflen: usize, is_bcast: bool) -> Self {
         Self(Arc::new(Mutex::new(NblkInStreamInner {
             recv,
             queue: BytesMutQueue::new(buflen),
@@ -136,6 +138,7 @@ impl NblkInStreamRef {
             lagged: 0,
             closed: false,
             reader: None,
+            is_bcast,
         })))
     }
 }
@@ -167,9 +170,24 @@ def_driver!(pub(self), NblkInStreamRef; pub(self), NblkInStreamDriver; Nonblocki
 pub struct NonblockingInStream(NblkInStreamRef);
 
 impl NonblockingInStream {
-    /// Create a new NonblockingInStream from an InStream, with a buffer of size `buflen`
+    /// Create a new NonblockingInStream from a broadcast InStream with a buffer of size `buflen`
+    ///
+    /// This constructor should only be used for broadcast streams. See also
+    /// [NonblockingInStream::new_unicast].
     pub fn new(recv: InStream, buflen: usize) -> Self {
-        let inner = NblkInStreamRef::new(recv, buflen);
+        NonblockingInStream::new_x(recv, buflen, true)
+    }
+
+    /// Create a new NonblockingInStream from a unicast InStream with a buffer of size `buflen`
+    ///
+    /// This constructor should only be used for unicast streams. See also
+    /// [NonblockingInStream::new].
+    pub fn new_unicast(recv: InStream, buflen: usize) -> Self {
+        NonblockingInStream::new_x(recv, buflen, false)
+    }
+
+    fn new_x(recv: InStream, buflen: usize, is_bcast: bool) -> Self {
+        let inner = NblkInStreamRef::new(recv, buflen, is_bcast);
         let driver = NblkInStreamDriver(inner.clone());
         tokio::spawn(async move { driver.await });
         Self(inner)

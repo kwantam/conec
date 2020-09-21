@@ -10,6 +10,7 @@
 use crate::{
     ca::{generate_ca, generate_cert},
     client::StreamId,
+    consts::BCAST_SWEEP_SECS,
     Client, ClientConfig, Coord, CoordConfig, NonblockingInStream, NonblockingInStreamError,
     TaggedBroadcastInStream, TaggedDeserializer, TaglessBroadcastInStream,
 };
@@ -146,7 +147,7 @@ fn stream_uni() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -195,7 +196,7 @@ fn stream_bi() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -268,7 +269,7 @@ fn new_stream() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -359,7 +360,7 @@ fn stream_block_nonblock() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -412,7 +413,7 @@ fn stream_bi_multi() {
         }
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -453,7 +454,7 @@ fn stream_loopback() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -499,7 +500,7 @@ fn broadcast_loopback() {
         assert_eq!(to_send, rec.1);
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -612,7 +613,7 @@ fn broadcast_bidi() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -706,7 +707,7 @@ fn broadcast_codec() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -794,7 +795,7 @@ fn broadcast_sender_close() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -864,18 +865,23 @@ fn broadcast_receiver_close() {
         assert_eq!(to_send, rec2);
 
         assert_eq!(coord.num_broadcasts(), 1);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
+        assert_eq!(
+            client2.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (2, 2)
+        );
 
         drop(r1);
         drop(r2);
-        s1.send(to_send.clone()).await.unwrap();
-        time::delay_for(Duration::from_millis(40)).await;
-        assert_eq!(
-            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
-            (2, 0)
-        );
-
-        time::delay_for(Duration::from_millis(40)).await;
+        time::delay_for(Duration::from_secs(BCAST_SWEEP_SECS * 2 + 1)).await;
         assert_eq!(coord.num_broadcasts(), 0);
+        client1
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
         client2
             .get_broadcast_count("broadcast_chan".to_string())
             .await
@@ -883,7 +889,7 @@ fn broadcast_receiver_close() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -960,6 +966,10 @@ fn broadcast_block_nonblock() {
         let (mut s4, r4) = client4.new_broadcast("broadcast_chan".to_string()).await.unwrap();
         let mut r4 = TaglessBroadcastInStream::new(r4);
         assert_eq!(coord.num_broadcasts(), 1);
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (4, 4)
+        );
 
         // send until broadcast blocks
         let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
@@ -990,7 +1000,7 @@ fn broadcast_block_nonblock() {
         let handle = tokio::spawn(async move {
             let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
             let mut to_send = stream::repeat(to_send).take(4 * count).map(Ok);
-            s2.send_all(&mut to_send).await.ok();
+            s2.send_all(&mut to_send).await.unwrap();
             s2
         });
         // read from 3 of the 4 until timeout
@@ -1027,7 +1037,7 @@ fn broadcast_block_nonblock() {
         let handle = tokio::spawn(async move {
             let to_send = Bytes::copy_from_slice(&vec![0; 16384][..]);
             let mut to_send = stream::repeat(to_send).take(4 * count).map(Ok);
-            s2.send_all(&mut to_send).await.ok();
+            s2.send_all(&mut to_send).await.unwrap();
             s2
         });
         // read from 3 of the 4 until timeout
@@ -1060,6 +1070,11 @@ fn broadcast_block_nonblock() {
                 assert_eq!(rec, to_send);
             }
         }
+
+        assert_eq!(
+            client1.get_broadcast_count("broadcast_chan".to_string()).await.unwrap(),
+            (4, 3)
+        );
 
         // now use the nonblocking adapters for everything
         let mut r1 = TaglessBroadcastInStream::new(NonblockingInStream::new(r1.into_inner(), 4));
@@ -1099,9 +1114,15 @@ fn broadcast_block_nonblock() {
             }
         }
 
+        client4
+            .get_broadcast_count("broadcast_chan".to_string())
+            .await
+            .expect_err("empty broadcast_chan");
+        assert_eq!(coord.num_broadcasts(), 0);
+
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1144,7 +1165,7 @@ fn channel_errors() {
             .expect_err("should get err closing nonexistent channel");
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1205,7 +1226,7 @@ fn channel_simple() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1280,7 +1301,7 @@ fn channel_close() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1343,7 +1364,7 @@ fn channel_oneway() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1409,7 +1430,7 @@ fn client_cert() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1528,7 +1549,7 @@ fn client_cert_channel() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1563,7 +1584,7 @@ fn reject_client_cert() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]
@@ -1593,7 +1614,7 @@ fn keepalive() {
 
         Ok(()) as Result<(), std::io::Error>
     })
-    .ok();
+    .unwrap();
 }
 
 #[test]

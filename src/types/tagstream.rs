@@ -97,15 +97,21 @@ where
     type Item = Result<BytesMut, E>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match self.0.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(mut buf))) => {
-                match TaggedInStream::get_id(&mut buf) {
-                    Ok(_) => (),
-                    Err(e) => return Poll::Ready(Some(Err(e.into()))),
-                };
-                Poll::Ready(Some(Ok(buf)))
-            }
-            p => p, // everything else passes through
+        loop {
+            return match self.0.poll_next_unpin(cx) {
+                Poll::Ready(Some(Ok(mut buf))) => {
+                    if buf.is_empty() {
+                        // XXX(broadcast hack): this is the 'keepalive' coming from the coordinator
+                        continue;
+                    }
+                    match TaggedInStream::get_id(&mut buf) {
+                        Ok(_) => (),
+                        Err(e) => return Poll::Ready(Some(Err(e.into()))),
+                    };
+                    Poll::Ready(Some(Ok(buf)))
+                }
+                p => p, // everything else passes through
+            };
         }
     }
 }
@@ -138,21 +144,27 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         use std::io::{Error, ErrorKind::InvalidData};
-        match self.0.poll_next_unpin(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(Some(Ok(mut buf))) => {
-                let id_buf = match TaggedInStream::get_id(&mut buf) {
-                    Ok(b) => b,
-                    Err(e) => return Poll::Ready(Some(Err(e.into()))),
-                };
-                let id = String::from(match from_utf8(&id_buf[..]) {
-                    Ok(s) => s,
-                    Err(_) => return Poll::Ready(Some(Err(Error::new(InvalidData, "Utf8").into()))),
-                });
-                Poll::Ready(Some(Ok((id, buf))))
-            }
+        loop {
+            return match self.0.poll_next_unpin(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+                Poll::Ready(Some(Ok(mut buf))) => {
+                    if buf.is_empty() {
+                        // XXX(broadcast hack): this is the 'keepalive' coming from the coordinator
+                        continue;
+                    }
+                    let id_buf = match TaggedInStream::get_id(&mut buf) {
+                        Ok(b) => b,
+                        Err(e) => return Poll::Ready(Some(Err(e.into()))),
+                    };
+                    let id = String::from(match from_utf8(&id_buf[..]) {
+                        Ok(s) => s,
+                        Err(_) => return Poll::Ready(Some(Err(Error::new(InvalidData, "Utf8").into()))),
+                    });
+                    Poll::Ready(Some(Ok((id, buf))))
+                }
+            };
         }
     }
 }
